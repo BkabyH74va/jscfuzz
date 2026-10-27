@@ -1,0 +1,19 @@
+<!doctype html>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>structuredClone crash</title>
+<style>
+body{font:14px/1.5 ui-monospace,monospace;background:#111;color:#ddd;padding:12px}
+button{font:inherit;padding:10px 16px}
+</style>
+<p>Tap run. The tab dies in about two seconds.</p>
+<button onclick="go()">run</button>
+<pre id=o></pre>
+<script>
+function go(){
+  o.textContent = 'running...';
+  setTimeout(function(){
+    structuredClone([new Uint8Array(2**29)]);
+    o.textContent = 'survived';
+  }, 50);
+}
+</script>
