@@ -1,6 +1,6 @@
 <!doctype html>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>jscfuzz v9</title>
+<title>jscfuzz v10</title>
 <style>
 *{box-sizing:border-box}
 body{background:#0b0b0b;color:#ccc;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:8px}
@@ -20,16 +20,17 @@ textarea{width:100%;height:110px;background:#000;color:#ffd84d;border:1px solid 
 <script>
 (function(){
 var P=new URLSearchParams(location.search);
-var VER='jscfuzz v9';
+var VER='jscfuzz v10';
 var SMALL=P.has('small'),BIG=P.has('big'),SWEEP=P.has('sweep'),SWEEP2=P.has('sweep2');
 var SHOW=P.has('show')||P.has('noexec');
 var SEED0=(P.get('seed')!==null&&P.get('seed')!=='')?parseInt(P.get('seed'),10):null;
 var HANGMS=parseInt(P.get('ms')||'1500',10);
-var HOTN=parseInt(P.get('n')||'40',10);
+var HOTN=parseInt(P.get('n')||'25',10);
 var HB='jscfuzz-hb',LSRC='jscfuzz-lastsrc',LTA='jscfuzz-ta',LRUN='jscfuzz-run';
 
 var out=document.getElementById('out'),srcEl=document.getElementById('src'),ta=document.getElementById('ta');
 function log(s,c){var d=document.createElement('div');if(c)d.className=c;d.textContent=s;out.appendChild(d);while(out.childNodes.length>400)out.removeChild(out.firstChild);window.scrollTo(0,1e7);}
+function cut(s){s=String(s);return s.length>56?s.slice(0,56)+'…':s;}
 function showSrc(s){srcEl.textContent=s;try{localStorage.setItem(LSRC,s);}catch(e){}}
 function hb(v){try{localStorage.setItem(HB,v);}catch(e){}}
 
@@ -42,7 +43,7 @@ function gen(seed){
   var R=mulberry32(seed>>>0);
   function ri(n){return Math.floor(R()*n)%n;}
   function pk(a){return a[ri(a.length)];}
-  var o=['var W=function(f){try{return f()}catch(e){return 0}};'],vals=[],i,n=6+ri(7),e;
+  var o=['var E=[],W=function(f){try{return f()}catch(e){if(E.length<200)E.push(e.name)}};'],vals=[],i,n=6+ri(7),e;
   for(i=0;i<n;i++){
     switch(ri(10)){
       case 0: e='('+pk(STRS)+')';break;
@@ -61,7 +62,7 @@ function gen(seed){
   var m=4+ri(7),A,B,T,e2;
   for(i=0;i<m;i++){
     A=pk(vals);B=pk(vals);T='v'+(n+i);
-    switch(ri(19)){
+    switch(ri(21)){
       case 0: e2='structuredClone('+A+')';break;
       case 1: e2='JSON.parse(JSON.stringify('+A+'))';break;
       case 2: e2='('+A+'.set('+B+',0),'+A+')';break;
@@ -80,13 +81,15 @@ function gen(seed){
       case 15: e2='structuredClone(new Set(['+A+']))';break;
       case 16: e2='new DataView('+A+'.buffer)';break;
       case 17: e2='structuredClone('+A+'.buffer)';break;
+      case 18: e2='new Uint8Array('+A+'.buffer,0,8)';break;
+      case 19: e2='structuredClone(['+A+','+A+'])';break;
       default: e2=A+'.subarray(0,'+(1+ri(8))+')';
     }
     o.push('let '+T+'=W(function(){return '+e2+'});');vals.push(T);
   }
   var k=3+ri(3);
   for(i=0;i<k;i++)o.push('W(function(){return structuredClone('+pk(vals)+')});');
-  o.push('return '+pk(vals)+';');
+  o.push('return E.join(";")+"|"+typeof '+pk(vals)+';');
   return o.join('\n');
 }
 
@@ -114,7 +117,7 @@ function c2Code(c){
   return 'structuredClone(['+v+'])';
 }
 
-var WSRC="onmessage=function(e){var d=e.data,f;try{f=new Function(d.src);}catch(err){postMessage({t:'syntax',m:String(err.message)});return;}var c;try{f();c='ok';}catch(err){c='threw:'+((err&&err.name)||'?');}var h='-';if(d.n>0){try{for(var i=0;i<d.n;i++)f();h='ok';}catch(err){h='threw:'+((err&&err.name)||'?');}}postMessage({t:'done',c:c,h:h});};";
+var WSRC="onmessage=function(e){var d=e.data,f;try{f=new Function(d.src);}catch(err){postMessage({t:'syntax',m:String(err.message)});return;}var c;try{c='ok:'+f();}catch(err){c='threw:'+((err&&err.name)||'?');}var h='-';if(d.n>0){try{for(var i=0;i<d.n;i++){var x='ok:'+f();if(x!==c){h=x;break;}}if(h==='-')h=c;}catch(err){h='threw:'+((err&&err.name)||'?');}}postMessage({t:'done',c:c,h:h});};";
 
 var W=null,wd=0,mode='idle',nxt=0,curSeed=null,swi=0,sw2i=0,stopFlag=false;
 function mk(){var w=new Worker(URL.createObjectURL(new Blob([WSRC],{type:'text/javascript'})));w.onmessage=onmsg;return w;}
@@ -124,10 +127,8 @@ function onmsg(e){
   var d=e.data;clearTimeout(wd);
   if(mode==='run'){try{localStorage.setItem(LRUN,'ok');}catch(x){}}
   if(d.t==='syntax'){log('  SYNTAX: '+d.m,'bad');}
-  else{
-    log('  cold='+d.c+'  hot='+d.h,(d.c==='ok'&&d.h==='ok')?'dim':'warn');
-    if(d.c!==d.h)log('  DIVERGENCE','bad');
-  }
+  else if(d.c===d.h){log('  same: '+cut(d.c),'dim');}
+  else{log('  DIVERGENCE','bad');log('   cold: '+cut(d.c),'bad');log('   hot : '+cut(d.h),'bad');}
   if(mode==='sweep'){hb('sw:'+(swi-1)+':done');setTimeout(swStep,40);return;}
   if(mode==='sweep2'){hb('sw2:'+(sw2i-1)+':done');setTimeout(swStep2,40);return;}
   if(mode==='fuzz'&&curSeed!==null)hb('seed:'+curSeed+':done');
