@@ -1,6 +1,6 @@
 <!doctype html>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>jscfuzz v5</title>
+<title>jscfuzz v6</title>
 <style>
 *{box-sizing:border-box}
 body{background:#0b0b0b;color:#ccc;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:8px}
@@ -20,13 +20,13 @@ textarea{width:100%;height:110px;background:#000;color:#ffd84d;border:1px solid 
 <script>
 (function(){
 var P=new URLSearchParams(location.search);
-var VER='jscfuzz v5';
+var VER='jscfuzz v6';
 var SMALL=P.has('small');
 var SHOW=P.has('show')||P.has('noexec');
 var SEED0=(P.get('seed')!==null&&P.get('seed')!=='')?parseInt(P.get('seed'),10):null;
 var HANGMS=parseInt(P.get('ms')||'1500',10);
-var HOTN=parseInt(P.get('n')||'150',10);
-var HB='jscfuzz-hb',LSRC='jscfuzz-lastsrc',LTA='jscfuzz-ta';
+var HOTN=parseInt(P.get('n')||'80',10);
+var HB='jscfuzz-hb',LSRC='jscfuzz-lastsrc',LTA='jscfuzz-ta',LRUN='jscfuzz-run';
 
 var out=document.getElementById('out'),srcEl=document.getElementById('src'),ta=document.getElementById('ta');
 function log(s,c){var d=document.createElement('div');if(c)d.className=c;d.textContent=s;out.appendChild(d);while(out.childNodes.length>400)out.removeChild(out.firstChild);window.scrollTo(0,1e7);}
@@ -34,14 +34,14 @@ function showSrc(s){srcEl.textContent=s;try{localStorage.setItem(LSRC,s);}catch(
 
 function mulberry32(a){return function(){a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 var TYS=['Uint8Array','Uint8ClampedArray','Uint16Array','Int32Array','Float64Array'];
-var BIGS=SMALL?['2**24','2**20','2**16','100000']:['2**31-1','2**30','2**28','2**24','2**20'];
+var BIGS=SMALL?['2**24','2**20','2**16','100000']:['2**24','2**20','1000','2**28','2**31-1'];
 var STRS=SMALL?['""','"a"','"abc"']:['""','"a"','"abc"','"q".repeat(2**20)','"w".repeat(2**24)'];
 
 function gen(seed){
   var R=mulberry32(seed>>>0);
   function ri(n){return Math.floor(R()*n)%n;}
   function pk(a){return a[ri(a.length)];}
-  var o=[],vals=[],i,n=6+ri(7),e;
+  var o=['var W=function(f){try{return f()}catch(e){return 0}};'],vals=[],i,n=6+ri(7),e;
   for(i=0;i<n;i++){
     switch(ri(9)){
       case 0: e='('+pk(STRS)+')';break;
@@ -54,9 +54,9 @@ function gen(seed){
       case 7: e='new Map([['+ri(9)+',"s"]])';break;
       default: e='new Set(['+ri(9)+'])';
     }
-    o.push('let v'+i+'='+e+';');vals.push('v'+i);
+    o.push('let v'+i+'=W(function(){return '+e+'});');vals.push('v'+i);
   }
-  var m=3+ri(6),A,B,T,e2;
+  var m=4+ri(7),A,B,T,e2;
   for(i=0;i<m;i++){
     A=pk(vals);B=pk(vals);T='v'+(n+i);
     switch(ri(12)){
@@ -73,10 +73,10 @@ function gen(seed){
       case 10: e2=A+'.length';break;
       default: e2='('+A+'||0)+1';
     }
-    o.push('let '+T+'='+e2+';');vals.push(T);
+    o.push('let '+T+'=W(function(){return '+e2+'});');vals.push(T);
   }
-  var k=2+ri(3);
-  for(i=0;i<k;i++)o.push('structuredClone('+pk(vals)+');');
+  var k=3+ri(3);
+  for(i=0;i<k;i++)o.push('W(function(){return structuredClone('+pk(vals)+')});');
   o.push('return '+pk(vals)+';');
   return o.join('\n');
 }
@@ -89,6 +89,7 @@ function reset(){clearTimeout(wd);if(W)W.terminate();W=mk();}
 function finish(){if(mode==='fuzz'){setTimeout(step,0);}else{mode='idle';log('done.','dim');}}
 function onmsg(e){
   var d=e.data;clearTimeout(wd);
+  if(mode==='run'){try{localStorage.setItem(LRUN,'ok');}catch(x){}}
   if(d.t==='syntax'){log('  SYNTAX: '+d.m,'bad');finish();return;}
   log('  cold='+d.c+'  hot='+d.h,(d.c==='ok'&&d.h==='ok')?'dim':'warn');
   if(d.c!==d.h)log('  DIVERGENCE '+d.c+' vs '+d.h,'bad');
@@ -111,15 +112,16 @@ document.getElementById('cp').onclick=function(){var t=srcEl.textContent;
   else log('no clipboard','warn');};
 document.getElementById('run').onclick=function(){
   var code=ta.value;if(!code.trim())return;
-  try{localStorage.setItem(LTA,code);}catch(e){}
+  try{localStorage.setItem(LTA,code);localStorage.setItem(LRUN,'pending');}catch(e){}
   mode='run';reset();log('-- RUN n='+HOTN);
   W.postMessage({t:'run',src:'"use strict";\n'+code,n:HOTN});
-  wd=setTimeout(function(){log('  RUN hang killed','warn');reset();mode='idle';},HANGMS*4);
+  wd=setTimeout(function(){log('  RUN hang killed','warn');reset();mode='idle';},HANGMS*5);
 };
-ta.value=localStorage.getItem(LTA)||'structuredClone(new Uint8Array(2**31-1))';
+ta.value=localStorage.getItem(LTA)||'new Uint8Array(new Set([3]))';
 ta.oninput=function(){try{localStorage.setItem(LTA,ta.value);}catch(e){}};
 
 log(VER+'   ms='+HANGMS+'  n='+HOTN+(SMALL?'  [small]':'')+(SHOW?'  [show]':''));
+try{ if(localStorage.getItem(LRUN)==='pending'){log('PREVIOUS RUN CRASHED THE TAB','bad');localStorage.setItem(LRUN,'ok');} }catch(e){}
 var last=localStorage.getItem(LSRC);if(last)srcEl.textContent=last;
 if(SHOW){
   if(SEED0!==null){var s=gen(SEED0);showSrc(s);log('seed '+SEED0+' source, NOT executed:');log(s);}
