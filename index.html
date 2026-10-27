@@ -1,6 +1,6 @@
 <!doctype html>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>jscfuzz v8</title>
+<title>jscfuzz v9</title>
 <style>
 *{box-sizing:border-box}
 body{background:#0b0b0b;color:#ccc;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:8px}
@@ -20,8 +20,8 @@ textarea{width:100%;height:110px;background:#000;color:#ffd84d;border:1px solid 
 <script>
 (function(){
 var P=new URLSearchParams(location.search);
-var VER='jscfuzz v8';
-var SMALL=P.has('small'),BIG=P.has('big'),SWEEP=P.has('sweep');
+var VER='jscfuzz v9';
+var SMALL=P.has('small'),BIG=P.has('big'),SWEEP=P.has('sweep'),SWEEP2=P.has('sweep2');
 var SHOW=P.has('show')||P.has('noexec');
 var SEED0=(P.get('seed')!==null&&P.get('seed')!=='')?parseInt(P.get('seed'),10):null;
 var HANGMS=parseInt(P.get('ms')||'1500',10);
@@ -104,9 +104,19 @@ function comboCode(c){
   }
 }
 
+var S2=[['2**22',4194304],['2**24',16777216],['2**26',67108864],['2**28',268435456],['2**29',536870912],['2**30',1073741824],['2**31',2147483648]];
+var C2=[];
+(function(){for(var s=0;s<S2.length;s++)for(var t=0;t<2;t++)for(var w=0;w<3;w++)C2.push([S2[s][0],S2[s][1],t?'DataView':'Uint8Array',['alloc','clone','nested'][w]]);})();
+function c2Code(c){
+  var v=(c[2]==='DataView')?'new DataView(new ArrayBuffer('+c[0]+'))':'new '+c[2]+'('+c[0]+')';
+  if(c[3]==='alloc')return v;
+  if(c[3]==='clone')return 'structuredClone('+v+')';
+  return 'structuredClone(['+v+'])';
+}
+
 var WSRC="onmessage=function(e){var d=e.data,f;try{f=new Function(d.src);}catch(err){postMessage({t:'syntax',m:String(err.message)});return;}var c;try{f();c='ok';}catch(err){c='threw:'+((err&&err.name)||'?');}var h='-';if(d.n>0){try{for(var i=0;i<d.n;i++)f();h='ok';}catch(err){h='threw:'+((err&&err.name)||'?');}}postMessage({t:'done',c:c,h:h});};";
 
-var W=null,wd=0,mode='idle',nxt=0,curSeed=null,swi=0,stopFlag=false;
+var W=null,wd=0,mode='idle',nxt=0,curSeed=null,swi=0,sw2i=0,stopFlag=false;
 function mk(){var w=new Worker(URL.createObjectURL(new Blob([WSRC],{type:'text/javascript'})));w.onmessage=onmsg;return w;}
 function reset(){clearTimeout(wd);if(W)W.terminate();W=mk();}
 function finish(){if(mode==='fuzz'){setTimeout(step,0);}else{mode='idle';log('done.','dim');}}
@@ -119,6 +129,7 @@ function onmsg(e){
     if(d.c!==d.h)log('  DIVERGENCE','bad');
   }
   if(mode==='sweep'){hb('sw:'+(swi-1)+':done');setTimeout(swStep,40);return;}
+  if(mode==='sweep2'){hb('sw2:'+(sw2i-1)+':done');setTimeout(swStep2,40);return;}
   if(mode==='fuzz'&&curSeed!==null)hb('seed:'+curSeed+':done');
   finish();
 }
@@ -139,6 +150,14 @@ function swStep(){
   W.postMessage({t:'run',src:'"use strict";\n'+code,n:1});
   wd=setTimeout(function(){log('  hang','warn');reset();hb('sw:'+i+':done');setTimeout(swStep,40);},4000);
 }
+function swStep2(){
+  if(sw2i>=C2.length){log('sweep2 complete.','ok');mode='idle';return;}
+  var i=sw2i++,c=C2[i],code=c2Code(c);
+  showSrc(code);hb('sw2:'+i+':running');reset();
+  log('#'+i+'/'+C2.length+'  '+c[0]+' ('+(c[1]/1048576)+'MB)  '+c[2]+'  '+c[3]);
+  W.postMessage({t:'run',src:'"use strict";\n'+code,n:1});
+  wd=setTimeout(function(){log('  hang','warn');reset();hb('sw2:'+i+':done');setTimeout(swStep2,40);},6000);
+}
 
 document.getElementById('fz').onclick=function(){if(mode==='fuzz')return;mode='fuzz';stopFlag=false;log('FUZZ from seed '+nxt);step();};
 document.getElementById('st').onclick=function(){stopFlag=true;};
@@ -153,14 +172,19 @@ document.getElementById('run').onclick=function(){
   W.postMessage({t:'run',src:'"use strict";\n'+code,n:HOTN});
   wd=setTimeout(function(){log('  RUN hang killed','warn');reset();mode='idle';},HANGMS*5);
 };
-ta.value=localStorage.getItem(LTA)||'structuredClone(new Uint8Array(new Set([3])))';
+ta.value=localStorage.getItem(LTA)||'structuredClone([new Uint8Array(2**28)])';
 ta.oninput=function(){try{localStorage.setItem(LTA,ta.value);}catch(e){}};
 
-log(VER+'   ms='+HANGMS+'  n='+HOTN+(SMALL?'  [small]':'')+(BIG?'  [big]':'')+(SWEEP?'  [sweep]':'')+(SHOW?'  [show]':''));
+log(VER+'   ms='+HANGMS+'  n='+HOTN+(SMALL?'  [small]':'')+(BIG?'  [big]':'')+(SWEEP?'  [sweep]':'')+(SWEEP2?'  [sweep2]':'')+(SHOW?'  [show]':''));
 try{ if(localStorage.getItem(LRUN)==='pending'){log('PREVIOUS RUN CRASHED THE TAB','bad');localStorage.setItem(LRUN,'ok');} }catch(e){}
 var last=localStorage.getItem(LSRC);if(last)srcEl.textContent=last;
 
-if(SWEEP){
+if(SWEEP2){
+  var a0=0,s2=localStorage.getItem(HB),n2=s2&&/^sw2:(\d+):(\w+)/.exec(s2);
+  if(n2){a0=parseInt(n2[1],10)+1;if(n2[2]==='running')log('PREVIOUS STEP DIED: #'+(a0-1),'bad');}
+  sw2i=a0;mode='sweep2';log('sweep2 from #'+a0+' of '+C2.length);
+  W=mk();setTimeout(swStep2,400);
+}else if(SWEEP){
   var s0=0,sw=localStorage.getItem(HB),m0=sw&&/^sw:(\d+):(\w+)/.exec(sw);
   if(m0){s0=parseInt(m0[1],10)+1;if(m0[2]==='running')log('PREVIOUS SWEEP STEP DIED: #'+(s0-1),'bad');}
   swi=s0;mode='sweep';log('sweep from #'+s0+' of '+COMBOS.length);
@@ -174,6 +198,6 @@ else{
   if(hb0){var mm=/^seed:(\d+):(\w+)/.exec(hb0);if(mm){from=parseInt(mm[1],10)+1;if(mm[2]==='running')log('PREVIOUS RUN DIED ON SEED '+(from-1),'bad');}}
   nxt=from;log('tap FUZZ, or paste a snippet and tap RUN');
 }
-if(!SWEEP)W=mk();
+if(!SWEEP&&!SWEEP2)W=mk();
 })();
 </script>
