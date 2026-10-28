@@ -3,15 +3,15 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>jscfuzz v30.3</title>
+<title>jscfuzz v32</title>
 <style>
 body{background:#000;color:#aaa;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:8px}
-#out{white-space:pre-wrap;word-break:break-all;max-height:55vh;overflow:auto;color:#aaa}
+#out{white-space:pre-wrap;word-break:break-all;max-height:50vh;overflow:auto;color:#aaa}
 button{background:#222;color:#ddd;border:1px solid #444;padding:8px 14px;margin:4px;font:inherit;cursor:pointer;border-radius:4px}
 button:active{background:#333}
 #ver{color:#6cf;font-size:11.5px;font-weight:700;letter-spacing:.06em;margin-bottom:6px}
 #src{background:#08240a;color:#9f9;padding:8px;margin:8px 0;border:1px solid #0a3;white-space:pre-wrap;word-break:break-all;max-height:30vh;overflow:auto;font-size:12px}
-#ta{width:100%;height:90px;background:#111;color:#cc0;border:1px solid #333;padding:6px;font:inherit;box-sizing:border-box;margin-top:6px}
+#ta{width:100%;height:80px;background:#111;color:#cc0;border:1px solid #333;padding:6px;font:inherit;box-sizing:border-box;margin-top:6px}
 #status{color:#888;margin-top:6px;font-size:12px}
 #status.run{color:#0f0}
 #ifr{position:absolute;left:-10px;width:1px;height:1px;border:0;opacity:.01}
@@ -31,13 +31,14 @@ button:active{background:#333}
 <div id=status>Stopped at seed 0.</div>
 <iframe id=ifr sandbox="allow-scripts allow-same-origin"></iframe>
 <script>
-var VER='v30.3';
+var VER='v32';
 var Q=new URLSearchParams(location.search);
 var MODE=+(Q.get('mode')||0);
-var MS=+(Q.get('ms')||6000);
+var MS=+(Q.get('ms')||2500);
 var NL=+(Q.get('n')||10);
 var BIG=Q.has('big'),SMALL=Q.has('small');
 var START=Q.has('seed')?+Q.get('seed'):0;
+var PL=32,CW=8,MAXC=80;
 
 var ifr=document.getElementById('ifr');
 var out=document.getElementById('out');
@@ -48,7 +49,8 @@ var ver=document.getElementById('ver');
 
 ver.textContent='jscfuzz '+VER+'  |  mode '+MODE;
 
-var seed=START,running=false,runOpen=false,timer=0,iframeTimer=0,lastCrash='',activeSeed=START;
+var seed=START,running=false,runOpen=false,iframeTimer=0,lastCrash='',activeSeed=START;
+var CORP=[];
 var K=["png","gif","jpg","webp","ttf","woff","wav","mp3","svg","wasm"];
 
 function mk(s){return function(){s|=0;s=s+0x6D2B79F5|0;var t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
@@ -58,7 +60,34 @@ function hex(a){var s='';for(var i=0;i<a.length;i++)s+=(a[i]<16?'0':'')+a[i].toS
 function u32(a,o,v){a[o]=v>>>24&255;a[o+1]=v>>>16&255;a[o+2]=v>>>8&255;a[o+3]=v&255}
 function u16(a,o,v){a[o]=v>>>8&255;a[o+1]=v&255}
 function put(a,o,s){for(var i=0;i<s.length;i++)a[o+i]=s.charCodeAt(i)&255}
-function hb(){try{var now=Date.now();localStorage.setItem('HB',String(now));localStorage.setItem('jscfuzz-hb',String(now))}catch(e){}}
+function hb(){try{localStorage.setItem('HB',String(Date.now()))}catch(e){}}
+
+function saveCorp(){try{localStorage.setItem('CORP',JSON.stringify(CORP))}catch(e){}}
+function loadCorp(){try{var c=localStorage.getItem('CORP');if(c)CORP=JSON.parse(c)||[]}catch(e){CORP=[]}}
+function score(n){
+  if(!n)return 0;
+  if(n.indexOf(':ok')>0)return 6;
+  if(n.indexOf('RangeError')>0||n.indexOf('IndexSizeError')>0)return 5;
+  if(n.indexOf('EncodingError')>0)return 4;
+  if(n.indexOf('NotSupportedError')>0||n.indexOf('SyntaxError')>0||n.indexOf('CompileError')>0)return 3;
+  if(n.indexOf('TypeError')>0||n.indexOf('TO')>0)return 2;
+  return 1;
+}
+function addCorp(t,h,s){
+  if(s<3)return;
+  for(var i=0;i<CORP.length;i++)if(CORP[i].h===h)return;
+  CORP.push({t:t,h:h,s:s});
+  CORP.sort(function(a,b){return b.s-a.s});
+  if(CORP.length>MAXC)CORP.length=MAXC;
+  saveCorp();
+}
+function pickCorp(R,t){
+  var pool=[];
+  for(var i=0;i<CORP.length;i++)if(CORP[i].t===t)pool.push(CORP[i]);
+  if(!pool.length)return null;
+  var top=pool.slice(0,Math.max(3,Math.ceil(pool.length/2)));
+  return top[ri(R,top.length)];
+}
 
 var PAT=[
 function(){return 'var a=new Uint8Array(SZ);a[0]=1;return structuredClone(a)'},
@@ -93,10 +122,13 @@ function rs(sd){
 }
 
 function mut(a,R){
-  var k=Math.floor(R()*4);
-  if(k===0&&a.length>12)a[8+Math.floor(R()*(a.length-8))]=Math.floor(R()*256);
-  if(k===1&&a.length>16)return a.subarray(0,8+Math.floor(R()*(a.length-8)));
-  if(k===2&&a.length>16){var o=4+Math.floor(R()*8),v=[0,2147483647,4294967295,2147483648][Math.floor(R()*4)];if(o+3<a.length)u32(a,o,v)}
+  var k=Math.floor(R()*6),o;
+  if(k===0&&a.length>12){a[8+Math.floor(R()*(a.length-8))]=Math.floor(R()*256)}
+  else if(k===1&&a.length>16){return a.subarray(0,8+Math.floor(R()*(a.length-8)))}
+  else if(k===2&&a.length>16){o=4+Math.floor(R()*8);if(o+3<a.length)u32(a,o,[0,2147483647,4294967295,2147483648,65535,65536][Math.floor(R()*6)])}
+  else if(k===3&&a.length>12){o=4+Math.floor(R()*(a.length-8));u16(a,o,a.length+Math.floor(R()*4096))}
+  else if(k===4&&a.length>24){o=8+Math.floor(R()*(a.length-16));a.fill(255,o,o+2+Math.floor(R()*6))}
+  else{o=8+Math.floor(R()*(a.length-8));if(o+3<a.length)u32(a,o,a.length*2)}
   return a;
 }
 function mkpng(R){var n=40+Math.floor(R()*60),a=new Uint8Array(n+64),i;
@@ -124,7 +156,7 @@ function mkfnt(R,w){var n=16+Math.floor(R()*40),a=new Uint8Array(n+160),o,i;
   if(w){put(a,0,"wOFF");u32(a,4,65536);u32(a,8,n+40);u16(a,12,1+Math.floor(R()*64));o=14}
   else{a[0]=0;a[1]=1;a[2]=0;a[3]=0;u16(a,4,1+Math.floor(R()*64));o=6}
   for(i=o;i<a.length;i++)a[i]=Math.floor(R()*256);return a}
-function mkwav(R){var n=20+Math.floor(R()*80),a=new Uint8Array(n+48),i;
+function mkwav(R){var n=40+Math.floor(R()*120),a=new Uint8Array(n+48),i;
   put(a,0,"RIFF");u32(a,4,n+36);put(a,8,"WAVE");put(a,12,"fmt ");u32(a,16,16);
   u16(a,20,1);u16(a,22,1+Math.floor(R()*4));u32(a,24,8000+Math.floor(R()*88000));
   u32(a,28,8000);u16(a,32,1);u16(a,34,8);put(a,36,"data");u32(a,40,n);
@@ -145,41 +177,55 @@ function by(t,R){
         t==="wasm"?mkwasm(R):mksvg(R);
   return mut(a,R);
 }
-function wrapS(t){
-  if(t==="ttf"||t==="woff")return 'new FontFace("f0",new Uint8Array(64)).load()';
-  if(t==="wav"||t==="mp3")return 'new AudioContext().decodeAudioData(new Uint8Array(64).buffer)';
-  if(t==="svg")return 'new DOMParser().parseFromString("<svg/>","image/svg+xml")';
-  if(t==="wasm")return 'WebAssembly.compile(new Uint8Array(64))';
-  return 'createImageBitmap(new Blob([new Uint8Array(64)]))';
+
+function callFor(t,i,h){
+  var H='hx("'+h+'")';
+  if(t==="ttf"||t==="woff")return 'new FontFace("f'+i+'",'+H+').load().then(function(f){return df(f,'+i+')})';
+  if(t==="wav"||t==="mp3")return 'AC.decodeAudioData('+H+'.buffer)';
+  if(t==="svg")return 'P(new TextDecoder().decode('+H+'))';
+  if(t==="wasm")return 'WebAssembly.compile('+H+')';
+  return 'createImageBitmap(new Blob(['+H+'])).then(dw)';
 }
 
 function rs5(sd){
   var R=mk(sd),s='"use strict";\nvar AC=null;try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}\n';
-  s+='if(!window.FontFace)TR.push("noFF");\nvar t,b,i=0;\n',ex='';
-  for(var i=0;i<12;i++){
-    var t=K[ri(R,K.length)],h=hex(by(t,R));
-    if(i===0)ex=wrapS(t);
-    s+='t="'+t+'";\nb=hx("'+h+'");\ni='+i+';\n';
-    s+='if(t==="png"||t==="gif"||t==="jpg"||t==="webp")await A(t,createImageBitmap(new Blob([b])));\n';
-    s+='if((t==="ttf"||t==="woff")&&window.FontFace)await A(t,new FontFace("f"+i,b).load());\n';
-    s+='if((t==="wav"||t==="mp3")&&AC)await A(t,AC.decodeAudioData(b.buffer.slice(0)));\n';
-    s+='if(t==="svg")await A(t,P(new TextDecoder().decode(b)));\n';
-    s+='if(t==="wasm")await A(t,WebAssembly.compile(b));\n';
+  s+='if(!window.FontFace)TR.push("noFF");\nvar q,i;\n';
+  var t=K[ri(R,K.length)],base=by(t,R),hs=[],ex='';
+  if(t==="svg")ex='new DOMParser().parseFromString("<svg/>","image/svg+xml")';
+  else if(t==="ttf"||t==="woff")ex='new FontFace("f0",new Uint8Array(64)).load()';
+  else if(t==="wav"||t==="mp3")ex='new AudioContext().decodeAudioData(new Uint8Array(64).buffer)';
+  else if(t==="wasm")ex='WebAssembly.compile(new Uint8Array(64))';
+  else ex='createImageBitmap(new Blob([new Uint8Array(64)]))';
+  for(var i=0;i<PL;i++){
+    var src0=(CORP.length&&R()<0.75)?pickCorp(R,t):null;
+    var b;
+    if(src0){b=mut(hxPage(src0.h),R)}
+    else{b=mut(new Uint8Array(base),R)}
+    var h=hex(b);hs.push(h);
+    s+='q=[];\n';
+    for(var j=0;j<CW&&i<PL;j++,i++){
+      if(j>0){var s2=(CORP.length&&R()<0.75)?pickCorp(R,t):null;
+        var b2=s2?mut(hxPage(s2.h),R):mut(new Uint8Array(base),R);
+        h=hex(b2);hs.push(h);}
+      s+='q.push(A("'+t+'",'+i+','+callFor(t,i,h)+'));\n';
+    }
+    s+='await Promise.all(q);\n';
   }
-  return {code:s,expr:ex};
+  return {code:s,expr:ex,hs:hs};
 }
+function hxPage(h){var a=new Uint8Array(h.length>>1);for(var i=0;i<a.length;i++)a[i]=parseInt(h.substr(i*2,2),16);return a}
 
 function PRE(p,sd){
  return '<!doctype html><meta charset=utf-8><script>'+
  'var SEED='+sd+';var R=mk(SEED);var TR=[];'+
  'function mk(s){return function(){s|=0;s=s+0x6D2B79F5|0;var t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}'+
- 'function ri(R,n){var x=Math.floor(R()*n)%n;return x<0?0:x}'+
  'function hx(s){var a=new Uint8Array(s.length>>1);for(var i=0;i<a.length;i++)a[i]=parseInt(s.substr(i*2,2),16);return a}'+
- 'function W(f,fb){try{var r=f();TR.push("ok:"+(r===undefined?"u":typeof r));return r}catch(e){TR.push("x:"+(e&&e.name||"E"));return fb}}'+
  'function T(p,ms){return Promise.race([p,new Promise(function(_,j){setTimeout(function(){j("TO")},ms)})])}'+
- 'async function A(t,p){try{await T(p,400);TR.push(t+":ok")}catch(e){TR.push(t+":x:"+(e&&e.name||e||"E"))}}'+
+ 'async function A(t,i,p){try{await T(p,600);TR.push(i+":"+t+":ok")}catch(e){TR.push(i+":"+t+":x:"+(e&&e.name||e||"E"))}}'+
  'function P(x){try{(new DOMParser()).parseFromString(x,"image/svg+xml")}catch(e){}return Promise.resolve(1)}'+
- 'var COLD=async function(){TR=[];R=mk(SEED);try{var rv=await (async function(){'+p+'})();if(rv!==undefined)return String(rv)}catch(e){TR.push("top:"+(e&&e.name))}return TR.join(";")};'+
+ 'function dw(bm){try{var c=new OffscreenCanvas(8,8);c.getContext("2d").drawImage(bm,0,0)}catch(e){}return bm}'+
+ 'function df(f,i){try{document.fonts.add(f);var c=document.createElement("canvas").getContext("2d");c.font="12px \\"f"+i+"\\"";c.fillText("Ag",0,0)}catch(e){}return f}'+
+ 'var COLD=async function(){TR=[];R=mk(SEED);try{var rv=await (async function(){'+p+'})();if(rv!==undefined)return String(rv)}catch(e){TR.push("999:top:"+(e&&e.name))}TR.sort(function(a,b){return parseInt(a)-parseInt(b)});return TR.join(";")};'+
  '(async function(){var c=await COLD();var h=await COLD();parent.postMessage({k:"r",cold:c,hot:h},"*")})()'+
  '<\/script>';
 }
@@ -201,55 +247,66 @@ function runInIframe(p,sd,ms){
  });
 }
 
+function learn(trace,hs){
+  if(!trace)return;
+  var parts=trace.split(';');
+  for(var i=0;i<parts.length;i++){
+    var m=parts[i].match(/^(\d+):(\w+):(.*)$/);
+    if(!m)continue;
+    var idx=+m[1],h=hs[idx];
+    if(!h)continue;
+    addCorp(m[2],h,score(parts[i]));
+  }
+}
+
 async function go(useManual){
  if(runOpen)return;
  runOpen=true;
  activeSeed=useManual?'MANUAL':seed;
  try{localStorage.setItem('LASEED',String(activeSeed))}catch(e){}
- var p;
+ var p,hs=[];
  if(useManual&&ta.value.trim()){p=ta.value.trim();}
- else if(MODE===5){var o5=rs5(seed);p=o5.code;}
+ else if(MODE===5){var o5=rs5(seed);p=o5.code;hs=o5.hs;}
  else{p=rs(seed);}
  src.textContent='-- seed '+activeSeed+'\n'+p;
  try{localStorage.setItem('LSRC',p);localStorage.setItem('LRUN',String(seed))}catch(e){}
  hb();
- st.className='run';st.textContent='Running seed '+activeSeed+'...';
+ st.className='run';st.textContent='Running seed '+activeSeed+'... corpus='+CORP.length;
  var o=await runInIframe(p,seed,MS);
  runOpen=false;
  var stx;
  if(o.cold==='HANG'){stx='HANG/CRASH killed at '+MS+'ms';lastCrash=p;try{localStorage.setItem('LCRASH',JSON.stringify({seed:activeSeed,prog:p}))}catch(e){}}
- else if(o.cold===o.hot)stx='<span style="color:#9f9">same: '+o.cold+' (JIT x10)</span>';
+ else if(o.cold===o.hot){stx='<span style="color:#9f9">same: '+o.cold+' (JIT x10)</span>';if(MODE===5)learn(o.cold,hs);}
  else{stx='<span style="color:#f66">DIVERGE cold='+o.cold+' hot='+o.hot+'</span>';lastCrash=p;try{localStorage.setItem('jscfuzz-div',p)}catch(e){}}
  var line='<span style="color:#aaa">-- seed '+activeSeed+'</span>\n  '+stx;
  if(o.cold==='HANG')line='<span style="color:#aaa">-- seed '+activeSeed+'</span>\n  <span style="color:#f66">HANG/CRASH killed at '+MS+'ms</span>';
  out.innerHTML+=line+'\n';out.scrollTop=out.scrollHeight;
- if(!running){st.className='';st.textContent='Stopped at seed '+activeSeed+'.';try{localStorage.setItem('LASEED',String(activeSeed))}catch(e){}return;}
- seed++;
- activeSeed=seed;
+ while(out.childNodes.length>500)out.removeChild(out.firstChild);
+ if(!running){st.className='';st.textContent='Stopped at seed '+activeSeed+'. corpus='+CORP.length;return;}
+ seed++;activeSeed=seed;
  try{localStorage.setItem('LASEED',String(activeSeed))}catch(e){}
- st.className='run';st.textContent='Running seed '+activeSeed+'...';
+ st.className='run';st.textContent='Running seed '+activeSeed+'... corpus='+CORP.length;
  if(running)setTimeout(function(){go(false)},0);
 }
 
-function fuzz(){running=true;st.className='run';st.textContent='Running seed '+activeSeed+'...';go(false);}
-function stop(){running=false;st.className='';st.textContent='Stopped at seed '+activeSeed+'.';}
+function fuzz(){running=true;st.className='run';go(false);}
+function stop(){running=false;st.className='';st.textContent='Stopped at seed '+activeSeed+'. corpus='+CORP.length;}
 function runManual(){running=false;st.className='';st.textContent='Running manual...';go(true);}
 function copySrc(){navigator.clipboard.writeText(src.textContent).then(function(){st.className='';st.textContent='Copied.'})}
 function clr(){out.innerHTML='';st.className='';st.textContent='Cleared — seed='+seed;}
-function showCrash(){try{var c=localStorage.getItem('LCRASH');if(c){var o=JSON.parse(c);src.textContent='-- LAST CRASH seed '+o.seed+'\n'+o.prog;st.className='';st.textContent='Loaded last crash.'}else{st.className='';st.textContent='No crash stored.'}}catch(e){st.className='';st.textContent='Error loading crash.'}}
+function showCrash(){try{var c=localStorage.getItem('LCRASH');if(c){var o=JSON.parse(c);src.textContent='-- LAST CRASH seed '+o.seed+'\n'+o.prog;st.className='';st.textContent='Loaded last crash.'}else{st.className='';st.textContent='No crash stored.'}}catch(e){}}
 
-window.addEventListener('message',function(e){if(e.data&&e.data.k==='err'){out.innerHTML+='<span style="color:#f66">IFRAME ERROR: '+e.data.msg+'</span>\n';out.scrollTop=out.scrollHeight;}});
 window.addEventListener('error',function(e){out.innerHTML+='<span style="color:#f66">PAGE ERROR: '+e.message+'</span>\n';out.scrollTop=out.scrollHeight;});
 
+loadCorp();
 try{
  var ps=localStorage.getItem('LRUN');
  var pa=localStorage.getItem('LASEED');
  var pp=localStorage.getItem('LSRC');
  if(pp!==null)src.textContent=pp;
- if(ps!==null&&!Q.has('seed')){seed=+ps+1;}
- if(pa!==null){activeSeed=+pa;}
+ if(ps!==null&&!Q.has('seed')){seed=+ps;}
+ if(pa!==null&&pa!=='MANUAL'){activeSeed=+pa;}
 }catch(e){}
 if(!ta.value.trim())ta.value='structuredClone([new Uint8Array(64)])';
-
-if(!running)st.textContent='Stopped at seed '+activeSeed+'. mode='+MODE+' ms='+MS;
+st.textContent='Stopped at seed '+activeSeed+'. mode='+MODE+' ms='+MS+' corpus='+CORP.length;
 </script>
