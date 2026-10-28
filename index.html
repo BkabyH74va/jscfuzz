@@ -1,384 +1,245 @@
 <!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>jscfuzz v16.3</title>
 <style>
 *{box-sizing:border-box}
-body{background:#0b0b0b;color:#ccc;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:12px}
-#out{white-space:pre-wrap;word-break:break-word;background:#000;border:1px solid #2a2a2a;padding:8px;min-height:160px;max-height:400px;overflow-y:auto;margin-bottom:8px;border-radius:6px}
-#src{white-space:pre-wrap;word-break:break-word;background:#04140a;color:#7fe07f;border:1px solid #073;padding:8px;margin:8px 0;border-radius:6px;max-height:200px;overflow-y:auto}
-button{font:inherit;background:#1e1e1e;color:#ddd;border:1px solid #444;border-radius:6px;padding:8px 14px;margin:2px;cursor:pointer}
+body{background:#0b0b0b;color:#ccc;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:8px}
+#out{white-space:pre-wrap;word-break:break-word;background:#000;border:1px solid #2a2a2a;padding:8px;min-height:140px;margin-bottom:8px}
+#src{white-space:pre-wrap;word-break:break-word;background:#04140a;color:#7fe07f;border:1px solid #073;padding:8px;margin:8px 0}
+button{font:inherit;background:#1e1e1e;color:#ddd;border:1px solid #444;border-radius:6px;padding:10px 16px;margin:2px}
 button:active{background:#3a3a3a}
-textarea{width:100%;height:120px;background:#000;color:#ffd84d;border:1px solid #444;border-radius:6px;font:inherit;padding:8px;resize:vertical}
+textarea{width:100%;height:120px;background:#000;color:#ffd84d;border:1px solid #444;border-radius:6px;font:inherit;padding:8px}
 .warn{color:#ffd84d}.bad{color:#ff8080}.ok{color:#7fe07f}.dim{color:#777}.crit{color:#ff0040}
-#status{font-size:12px;color:#888;margin-top:6px}
+#status{font-size:12px;color:#888;margin-top:4px}
 iframe{display:none}
-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-h1{font-size:14px;margin:0;color:#fff}
 </style>
-</head>
-<body>
-<header>
-  <h1>jscfuzz v16.3 — JavaScript Engine Fuzzer</h1>
-  <div id=status>Initializing...</div>
-</header>
-
 <div id=out></div>
 <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
-  <button id=fz>FUZZ</button>
-  <button id=st>STOP</button>
-  <button id=run>RUN</button>
-  <button id=cp>COPY</button>
-  <button id=cl>CLR</button>
-  <button id=crash>SHOW LAST CRASH</button>
+<button id=fz>FUZZ</button><button id=st>STOP</button><button id=run>RUN</button><button id=cp>COPY</button><button id=cl>CLR</button><button id=crash>SHOW LAST CRASH</button>
 </div>
 <div id=src>--</div>
 <textarea id=ta spellcheck=false autocapitalize=off autocorrect=off></textarea>
-
+<div id=status></div>
 <iframe id=ifr sandbox="allow-scripts"></iframe>
-
 <script>
 (function(){
-  const P = new URLSearchParams(location.search);
-  const VER = 'jscfuzz v16.3';
-  const SEED0 = P.get('seed') !== null && P.get('seed') !== '' ? parseInt(P.get('seed'), 10) : null;
-  const HANGMS = parseInt(P.get('ms') || '8000', 10);
-  const HOTN = parseInt(P.get('n') || '10', 10);
-  
-  const HB = 'jscfuzz-hb-v163';
-  const LSRC = 'jscfuzz-lastsrc-v163';
-  const LTA = 'jscfuzz-ta-v163';
-  const LRUN = 'jscfuzz-run-v163';
-  const LCRASH = 'jscfuzz-crash-v163';
+var P=new URLSearchParams(location.search);
+var VER='jscfuzz v16.3';
+var SEED0=(P.get('seed')!==null&&P.get('seed')!=='')?parseInt(P.get('seed'),10):null;
+var HANGMS=parseInt(P.get('ms')||'8000',10);
+var HOTN=parseInt(P.get('n')||'10',10);
+var HB='jscfuzz-hb-v162',LSRC='jscfuzz-lastsrc-v162',LTA='jscfuzz-ta-v162',LRUN='jscfuzz-run-v162',LCRASH='jscfuzz-crash-v162';
+var out=document.getElementById('out'),srcEl=document.getElementById('src'),ta=document.getElementById('ta'),statusEl=document.getElementById('status'),ifr=document.getElementById('ifr');
+function log(s,c){var d=document.createElement('div');if(c)d.className=c;d.textContent=s;out.appendChild(d);while(out.childNodes.length>600)out.removeChild(out.firstChild);window.scrollTo(0,1e7);}
+function cut(s){s=String(s);return s.length>80?s.slice(0,80)+'…':s;}
+function showSrc(s){srcEl.textContent=s;try{localStorage.setItem(LSRC,s);}catch(e){}}
+function hb(v){try{localStorage.setItem(HB,v);}catch(e){}}
+function setStatus(s){statusEl.textContent=s;}
 
-  const out = document.getElementById('out');
-  const srcEl = document.getElementById('src');
-  const ta = document.getElementById('ta');
-  const statusEl = document.getElementById('status');
-  const ifr = document.getElementById('ifr');
+function mulberry32(a){return function(){a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 
-  function log(s, c) {
-    const d = document.createElement('div');
-    if (c) d.className = c;
-    d.textContent = s;
-    out.appendChild(d);
-    while (out.childNodes.length > 600) out.removeChild(out.firstChild);
-    out.scrollTop = out.scrollHeight;
+function gen(seed){
+  var R=mulberry32(seed>>>0),ri=function(n){var x=Math.floor(R()*n)%n;return x<0?0:x;},pk=function(a){return a[ri(a.length)];};
+  var o=[];
+  var mode=seed%5;
+  var i,j,e,pick,A,ops;
+
+  if(mode===0){
+    var patterns=[
+      'let a=new Uint8Array(8);Object.setPrototypeOf(a,null);structuredClone(a)',
+      'let a=new ArrayBuffer(16,{maxByteLength:64});let v=new Uint8Array(a,0,32);a.resize(8);structuredClone(v)',
+      'let a=new ArrayBuffer(16);let v=new Uint8Array(a);a.transfer();structuredClone(v)',
+      'let a=new Uint8Array(8);a[Symbol.toStringTag]="Uint32Array";structuredClone(a)',
+      'let a=new Float64Array(4);a[0]=NaN;a[1]=Infinity;structuredClone(a)',
+      'let a=new BigInt64Array([0x7fffffffffffffffn]);structuredClone(a)',
+      'let a=new Uint8Array(8);Object.freeze(a);structuredClone({x:a})',
+      'let a={};let v=new Uint8Array(8);Object.defineProperty(a,"x",{get:function(){v.__proto__=null;return v}});structuredClone(a)',
+      'let ns=Object.create(null);Object.defineProperty(ns,"length",{value:0x100000000});let a=new Uint8Array(8);Object.setPrototypeOf(a,ns);structuredClone(a)',
+      'let a=new Uint8Array(4);a[Symbol.iterator]=function(){return{next:function(){return{value:0x41,done:false}}}};structuredClone(a)',
+      'let a=new Uint8Array(8);let p=new Proxy(a,{get:function(t,prop){if(prop==="length")return 0x7fffffff;return Reflect.get(t,prop)}});structuredClone(p)',
+      'let Ta=Uint8Array;Ta[Symbol.species]=function(len){return new Uint8Array(0x10000)};let a=new Ta(4);structuredClone(a)',
+      'let a=new Uint8Array(8);a.self=a;structuredClone(a)',
+      'let a=new Uint16Array(4);let b=a.slice(0,0x7fffffff);structuredClone(b)',
+      'let a=new Uint8Array(8);let b=a.subarray(0,0x7fffffff);structuredClone(b)'
+    ];
+    o.push('var E=[],W=function(f,d){try{return f()}catch(e){E.push(e.name);return d}};');
+    pick=2+ri(3);
+    for(i=0;i<pick;i++) o.push('W(function(){return '+pk(patterns)+'},0);');
+    o.push('return E.join(";")+"|ok";');
   }
-
-  function cut(s) {
-    s = String(s);
-    return s.length > 80 ? s.slice(0, 80) + '…' : s;
+  else if(mode===1){
+    o.push('function f(a,b){');
+    o.push('if(typeof a==="number"){var x=a|0;var y=b>>>0;return(x*y)>>0;}');
+    o.push('if(a instanceof Uint8Array){a[0]=b;return a.length;}');
+    o.push('if(a instanceof Array){a.push(b);return a.length;}');
+    o.push('return String(a)+String(b);');
+    o.push('}');
+    o.push('for(var i=0;i<500;i++){f(i,i);f(new Uint8Array(4),i);f([1],i);f("s",i);}');
+    o.push('var r1=f(new Uint8Array(0x10000000),1);');
+    o.push('var r2=f({length:0x100000000},2);');
+    o.push('return r1+","+r2;');
   }
-
-  function showSrc(s) {
-    srcEl.textContent = s;
-    try { localStorage.setItem(LSRC, s); } catch (e) {}
+  else if(mode===2){
+    var sz=[8,16,32,64,128,256][ri(6)];
+    o.push('let a=new ArrayBuffer('+sz+',{maxByteLength:'+(sz*4)+'});');
+    o.push('let v1=new Uint8Array(a);let v2=new Uint16Array(a);');
+    o.push('a.resize('+(sz/2)+');');
+    o.push('let t=a.transfer();');
+    o.push('return v1.byteLength+v2.byteLength;');
   }
-
-  function hb(v) {
-    try { localStorage.setItem(HB, v); } catch (e) {}
+  else if(mode===3){
+    o.push('var E=[],W=function(f,d){try{return f()}catch(e){E.push(e.name);return d}};');
+    var arrOps=[
+      'let a=new Uint8Array(8);a.fill(0x41);return a.reverse()',
+      'let a=new Uint8Array(8);a.sort();return a',
+      'let a=new Uint8Array([3,1,4,1,5]);a.sort();return a',
+      'let a=new Uint8Array(8);let b=new Uint8Array(4);a.set(b,0);return a',
+      'let a=new Uint8Array(8);let b=new Uint16Array(4);a.set(b,0);return a',
+      'let a=new Uint8Array(4);return a.slice(0,0x7fffffff)',
+      'let a=new Uint8Array(4);return a.subarray(0,0x7fffffff)',
+      'let a=new Uint8Array(4);a.copyWithin(0,2);return a',
+      'let a=new Uint8Array([1,2,3]);return Array.from(a)',
+      'let a=new Uint8Array(4);return a.indexOf(0)',
+      'let a=new Uint8Array(4);return a.includes(0)',
+      'let a=new Uint8Array(4);return a.find(function(x){return x===0})',
+      'let a=new Uint8Array(4);return a.every(function(x){return x===0})',
+      'let a=new Uint8Array(4);return a.some(function(x){return x!==0})',
+      'let a=new Uint8Array(4);return a.map(function(x){return x+1})',
+      'let a=new Uint8Array(4);return a.filter(function(x){return x===0})',
+      'let a=new Uint8Array(4);return a.reduce(function(a,b){return a+b},0)',
+      'let a=new Uint8Array(4);return a.join(",")'
+    ];
+    pick=2+ri(4);
+    for(i=0;i<pick;i++) o.push('W(function(){return '+pk(arrOps)+'},0);');
+    o.push('return E.join(";")+"|ok";');
   }
-
-  function setStatus(s) {
-    statusEl.textContent = s;
-  }
-
-  // Mulberry32 PRNG
-  function mulberry32(a) {
-    return function() {
-      a = a + 0x6D2B79F5 | 0;
-      let t = Math.imul(a ^ a >>> 15, 1 | a);
-      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-      return ((t ^ t >>> 14) >>> 0) / 4294967296;
-    };
-  }
-
-  function gen(seed) {
-    const R = mulberry32(seed >>> 0);
-    const ri = (n) => Math.floor(R() * n);
-    const pk = (a) => a[ri(a.length)];
-    const o = [];
-    const mode = seed % 5;
-    
-    if (mode === 0) {
-      const patterns = [
-        'let a=new Uint8Array(8);Object.setPrototypeOf(a,null);structuredClone(a)',
-        'let a=new ArrayBuffer(16,{maxByteLength:64});let v=new Uint8Array(a,0,32);a.resize(8);structuredClone(v)',
-        'let a=new ArrayBuffer(16);let v=new Uint8Array(a);a.transfer();structuredClone(v)',
-        'let a=new Uint8Array(8);a[Symbol.toStringTag]="Uint32Array";structuredClone(a)',
-        'let a=new Float64Array(4);a[0]=NaN;a[1]=Infinity;structuredClone(a)',
-        'let a=new BigInt64Array([0x7fffffffffffffffn]);structuredClone(a)',
-        'let a=new Uint8Array(8);Object.freeze(a);structuredClone({x:a})',
-        'let a={};let v=new Uint8Array(8);Object.defineProperty(a,"x",{get:function(){v.__proto__=null;return v}});structuredClone(a)',
-        'let ns=Object.create(null);Object.defineProperty(ns,"length",{value:0x100000000});let a=new Uint8Array(8);Object.setPrototypeOf(a,ns);structuredClone(a)',
-        'let a=new Uint8Array(4);a[Symbol.iterator]=function(){return{next:function(){return{value:0x41,done:false}}}};structuredClone(a)',
-        'let a=new Uint8Array(8);let p=new Proxy(a,{get:function(t,prop){if(prop==="length")return 0x7fffffff;return Reflect.get(t,prop)}});structuredClone(p)',
-        'let Ta=Uint8Array;Ta[Symbol.species]=function(len){return new Uint8Array(0x10000)};let a=new Ta(4);structuredClone(a)',
-        'let a=new Uint8Array(8);a.self=a;structuredClone(a)',
-        'let a=new Uint16Array(4);let b=a.slice(0,0x7fffffff);structuredClone(b)',
-        'let a=new Uint8Array(8);let b=a.subarray(0,0x7fffffff);structuredClone(b)'
-      ];
-      o.push('var E=[],W=function(f,d){try{return f()}catch(e){E.push(e.name);return d}};');
-      const pick = 2 + ri(3);
-      for (let i = 0; i < pick; i++) o.push('W(function(){return ' + pk(patterns) + '},0);');
-      o.push('return E.join(";")+"|ok";');
-    }
-    else if (mode === 1) {
-      o.push('function f(a,b){');
-      o.push('if(typeof a==="number"){var x=a|0;var y=b>>>0;return(x*y)>>0;}');
-      o.push('if(a instanceof Uint8Array){a[0]=b;return a.length;}');
-      o.push('if(a instanceof Array){a.push(b);return a.length;}');
-      o.push('return String(a)+String(b);');
-      o.push('}');
-      o.push('for(var i=0;i<500;i++){f(i,i);f(new Uint8Array(4),i);f([1],i);f("s",i);}');
-      o.push('var r1=f(new Uint8Array(0x10000000),1);');
-      o.push('var r2=f({length:0x100000000},2);');
-      o.push('return r1+","+r2;');
-    }
-    else if (mode === 2) {
-      const sz = [8, 16, 32, 64, 128, 256][ri(6)];
-      o.push(`let a=new ArrayBuffer(${sz},{maxByteLength:${sz * 4}});`);
-      o.push('let v1=new Uint8Array(a);let v2=new Uint16Array(a);');
-      o.push(`a.resize(${sz / 2});`);
-      o.push('let t=a.transfer();');
-      o.push('return v1.byteLength+v2.byteLength;');
-    }
-    else if (mode === 3) {
-      o.push('var E=[],W=function(f,d){try{return f()}catch(e){E.push(e.name);return d}};');
-      const arrOps = [
-        'let a=new Uint8Array(8);a.fill(0x41);return a.reverse()',
-        'let a=new Uint8Array(8);a.sort();return a',
-        'let a=new Uint8Array([3,1,4,1,5]);a.sort();return a',
-        'let a=new Uint8Array(8);let b=new Uint8Array(4);a.set(b,0);return a',
-        'let a=new Uint8Array(8);let b=new Uint16Array(4);a.set(b,0);return a',
-        'let a=new Uint8Array(4);return a.slice(0,0x7fffffff)',
-        'let a=new Uint8Array(4);return a.subarray(0,0x7fffffff)',
-        'let a=new Uint8Array(4);return a.copyWithin(0,2);return a',
-        'let a=new Uint8Array([1,2,3]);return Array.from(a)',
-        'let a=new Uint8Array(4);return a.indexOf(0)',
-        'let a=new Uint8Array(4);return a.includes(0)',
-        'let a=new Uint8Array(4);return a.find(function(x){return x===0})',
-        'let a=new Uint8Array(4);return a.every(function(x){return x===0})',
-        'let a=new Uint8Array(4);return a.some(function(x){return x!==0})',
-        'let a=new Uint8Array(4);return a.map(function(x){return x+1})',
-        'let a=new Uint8Array(4);return a.filter(function(x){return x===0})',
-        'let a=new Uint8Array(4);return a.reduce(function(a,b){return a+b},0)',
-        'let a=new Uint8Array(4);return a.join(",")'
-      ];
-      const pick = 2 + ri(4);
-      for (let i = 0; i < pick; i++) o.push('W(function(){return ' + pk(arrOps) + '},0);');
-      o.push('return E.join(";")+"|ok";');
-    }
-    else {
-      const TYS = ['Uint8Array','Uint8ClampedArray','Uint16Array','Int32Array','Float64Array'];
-      const smallBigs = ['2**8','2**10','2**12','64','128','256'];
-      o.push('var E=[],W=function(f,d){try{return f()}catch(e){E.push(e.name);return d}};');
-      const vals = [];
-      const n = 3 + ri(3);
-      for (let i = 0; i < n; i++) {
-        let e;
-        switch (ri(8)) {
-          case 1: e = `new ${pk(TYS)}(${pk(smallBigs)})`; break;
-          case 2: e = `new ArrayBuffer(${pk(smallBigs)})`; break;
-          case 3: e = `[${ri(5)},${ri(5)}]`; break;
-          case 4: e = `{a:${ri(5)}}`; break;
-          case 5: e = `new Map([[${ri(5)},"s"]])`; break;
-          case 6: e = `new DataView(new ArrayBuffer(8))`; break;
-          default: e = `new Set([${ri(5)}])`;
-        }
-        o.push(`let v${i}=W(function(){return ${e}},0);`);
-        vals.push(`v${i}`);
+  else {
+    var TYS=['Uint8Array','Uint8ClampedArray','Uint16Array','Int32Array','Float64Array'];
+    var smallBigs=['2**8','2**10','2**12','64','128','256'];
+    o.push('var E=[],W=function(f,d){try{return f()}catch(e){E.push(e.name);return d}};');
+    var vals=[],n=3+ri(3);
+    for(i=0;i<n;i++){
+      switch(ri(8)){
+        case 1: e='new '+pk(TYS)+'('+pk(smallBigs)+')';break;
+        case 2: e='new ArrayBuffer('+pk(smallBigs)+')';break;
+        case 3: e='['+ri(5)+','+ri(5)+']';break;
+        case 4: e='{a:'+ri(5)+'}';break;
+        case 5: e='new Map([['+ri(5)+',"s"]])';break;
+        case 6: e='new DataView(new ArrayBuffer(8))';break;
+        default: e='new Set(['+ri(5)+'])';
       }
-      const m = 2 + ri(3);
-      for (let j = 0; j < m; j++) {
-        const A = pk(vals);
-        const ops = [
-          `structuredClone(${A})`, `structuredClone([${A}])`, `JSON.parse(JSON.stringify(${A}))`,
-          `${A}.slice(0,1)`, `${A}.subarray(0,1)`, `new Uint8Array(${A})`, `${A}.fill(0)`, `Object.assign({},${A})`
-        ];
-        o.push(`W(function(){return ${pk(ops)}},0);`);
-      }
-      o.push('return E.join(";")+"|ok";');
+      o.push('let v'+i+'=W(function(){return '+e+'},0);');vals.push('v'+i);
     }
-    return o.join('\n');
-  }
-
-  let iframeTimer = null;
-  let mode = 'idle';
-  let nxt = 0;
-  let curSeed = null;
-  let stopFlag = false;
-
-  function killIframe() {
-    clearTimeout(iframeTimer);
-    try { ifr.srcdoc = ''; } catch (e) {}
-    ifr.onload = null;
-  }
-
-  function runInIframe(src, n, seed) {
-    showSrc(src);
-    try {
-      localStorage.setItem(LCRASH, src);
-      localStorage.setItem(LRUN, 'pending:' + seed);
-    } catch (e) {}
-    hb('seed:' + seed + ':running');
-    curSeed = seed;
-    
-    const html = '<script>' +
-      'window.onerror=function(m,f,l,c,e){parent.postMessage({t:"err",msg:m,file:f,line:l,col:c,stack:e&&e.stack?e.stack:""},"*");};' +
-      'function go(){var f=new Function(' + JSON.stringify(src) + ');var c="ok:"+f();return c;}' +
-      'var cold,hots=[];try{cold=go();}catch(err){cold="threw:"+((err&&err.name)||"?");}' +
-      'for(var i=0;i<' + n + ';i++){try{var h=go();hots.push(h);if(h!==cold){parent.postMessage({t:"div",cold:cold,hot:h,iters:i},"*");return;}}catch(err){var eh="threw:"+((err&&err.name)||"?");if(eh!==cold){parent.postMessage({t:"div",cold:cold,hot:eh,iters:i},"*");return;}hots.push(eh);}}' +
-      'parent.postMessage({t:"done",cold:cold,allSame:true,hots:hots.length},"*");' +
-      '<\/script>';
-    
-    ifr.onload = function() {
-      iframeTimer = setTimeout(function() {
-        log('  HANG/CRASH killed at ' + HANGMS + 'ms', 'warn');
-        killIframe();
-        hb('seed:' + seed + ':hang');
-        finish();
-      }, HANGMS);
-    };
-    ifr.srcdoc = html;
-  }
-
-  window.addEventListener('message', function(e) {
-    const d = e.data;
-    clearTimeout(iframeTimer);
-    if (d.t === 'err') {
-      log('  JS ERROR: ' + cut(d.msg), 'bad');
-      if (d.stack) log('  ' + cut(d.stack.split('\n')[0]), 'dim');
-    } else if (d.t === 'div') {
-      log('  DIVERGENCE at iter ' + d.iters, 'crit');
-      log('   cold: ' + cut(d.cold), 'bad');
-      log('   hot : ' + cut(d.hot), 'bad');
-      try { localStorage.setItem('jscfuzz-div-v163', srcEl.textContent); } catch (x) {}
-    } else if (d.t === 'done') {
-      if (d.allSame) log('  same: ' + cut(d.cold) + (d.hots > 1 ? ' (JIT x' + d.hots + ')' : ''), 'dim');
-      else log('  mixed: ' + cut(d.cold), 'warn');
+    var m=2+ri(3);
+    for(j=0;j<m;j++){
+      A=pk(vals);
+      ops=['structuredClone('+A+')','structuredClone(['+A+'])','JSON.parse(JSON.stringify('+A+'))',A+'.slice(0,1)',A+'.subarray(0,1)','new Uint8Array('+A+')',A+'.fill(0)','Object.assign({},'+A+')'];
+      o.push('W(function(){return '+pk(ops)+'},0);');
     }
+    o.push('return E.join(";")+"|ok";');
+  }
+  return o.join('\n');
+}
+
+var iframeTimer=null,mode='idle',nxt=0,curSeed=null,stopFlag=false,runOpen=false;
+
+function killIframe(){clearTimeout(iframeTimer);runOpen=false;ifr.onload=null;try{ifr.srcdoc='';}catch(e){}}
+
+function runInIframe(src,n,seed){
+  showSrc(src);
+  try{localStorage.setItem(LCRASH,src);localStorage.setItem(LRUN,'pending:'+seed);}catch(e){}
+  hb('seed:'+seed+':running');
+  curSeed=seed;
+  killIframe();
+  runOpen=true;
+
+  var html='<script>window.onerror=function(m,f,l,c,e){parent.postMessage({t:"err",msg:m,file:f,line:l,col:c,stack:e&&e.stack?e.stack:""},"*");};'+
+    'function go(){var f=new Function('+JSON.stringify(src)+');var c="ok:"+f();return c;}'+
+    'var cold,hots=[];try{cold=go();}catch(err){cold="threw:"+((err&&err.name)||"?");}'+
+    'for(var i=0;i<'+n+';i++){try{var h=go();if(h!==cold){parent.postMessage({t:"div",cold:cold,hot:h,iters:i},"*");break;}hots.push(h);}catch(err){var eh="threw:"+((err&&err.name)||"?");if(eh!==cold){parent.postMessage({t:"div",cold:cold,hot:eh,iters:i},"*");break;}hots.push(eh);}}'+
+    'if(hots.length==='+n+')parent.postMessage({t:"done",cold:cold,hots:hots.length},"*");'+
+    '<\/script>';
+
+  iframeTimer=setTimeout(function(){
+    log('  HANG/CRASH killed at '+HANGMS+'ms','warn');
     killIframe();
-    if (mode === 'fuzz' && curSeed !== null) hb('seed:' + curSeed + ':done');
+    hb('seed:'+seed+':hang');
     finish();
-  });
+  },HANGMS);
 
-  function runSeed(seed) {
-    log('-- seed ' + seed);
-    setStatus('Running seed ' + seed + '...');
-    runInIframe('"use strict";\n' + gen(seed), HOTN, seed);
+  ifr.srcdoc=html;
+}
+
+window.addEventListener('message',function(e){
+  var d=e.data;
+  if(!d||!runOpen)return;
+  clearTimeout(iframeTimer);
+  if(d.t==='err'){
+    log('  JS ERROR: '+cut(d.msg),'bad');
+    if(d.stack)log('  '+cut(String(d.stack).split('\n')[0]),'dim');
+    return;
   }
-
-  function step() {
-    if (stopFlag) {
-      mode = 'idle';
-      log('stopped.');
-      setStatus('Stopped');
-      return;
-    }
-    runSeed(nxt++);
+  if(d.t==='div'){
+    log('  DIVERGENCE at iter '+d.iters,'crit');
+    log('   cold: '+cut(d.cold),'bad');
+    log('   hot : '+cut(d.hot),'bad');
+    try{localStorage.setItem('jscfuzz-div-v162',srcEl.textContent);}catch(x){}
+  }else if(d.t==='done'){
+    log('  same: '+cut(d.cold)+' (JIT x'+d.hots+')','dim');
   }
+  killIframe();
+  if(mode==='fuzz'&&curSeed!==null)hb('seed:'+curSeed+':done');
+  finish();
+});
 
-  function finish() {
-    if (mode === 'fuzz' && !stopFlag) {
-      setTimeout(step, 50);
-    } else {
-      mode = 'idle';
-      setStatus('Idle');
-      log('done.', 'dim');
-    }
+function runSeed(seed){
+  log('-- seed '+seed);setStatus('Running seed '+seed+'...');
+  runInIframe('"use strict";\n'+gen(seed),HOTN,seed);
+}
+
+function step(){if(stopFlag){mode='idle';log('stopped.');setStatus('Stopped');return;}runSeed(nxt++);}
+function finish(){if(mode==='fuzz'&&!stopFlag){setTimeout(step,50);}else{mode='idle';setStatus('Idle');log('done.','dim');}}
+
+document.getElementById('fz').onclick=function(){if(mode==='fuzz')return;mode='fuzz';stopFlag=false;log('FUZZ from seed '+nxt);step();};
+document.getElementById('st').onclick=function(){stopFlag=true;killIframe();setStatus('Stopping...');};
+document.getElementById('cl').onclick=function(){out.textContent='';};
+document.getElementById('cp').onclick=function(){
+  var t=srcEl.textContent;
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).then(function(){log('copied.','ok');},function(){log('copy blocked','warn');});
+  else log('no clipboard','warn');
+};
+document.getElementById('crash').onclick=function(){
+  var c=localStorage.getItem(LCRASH)||'(none saved)';
+  showSrc(c);log('LAST CRASH SOURCE shown in green box','ok');
+};
+document.getElementById('run').onclick=function(){
+  var code=ta.value;if(!code.trim())return;
+  try{localStorage.setItem(LTA,code);}catch(e){}
+  mode='run';curSeed=null;log('-- RUN n='+HOTN);
+  runInIframe('"use strict";\n'+code,HOTN,'manual');
+};
+
+ta.value=localStorage.getItem(LTA)||'structuredClone([new Uint8Array(64)])';
+ta.oninput=function(){try{localStorage.setItem(LTA,ta.value);}catch(e){}};
+
+log(VER+'   ms='+HANGMS+'  n='+HOTN);
+
+try{
+  var pending=localStorage.getItem(LRUN)||'';
+  if(pending.indexOf('pending:')===0){
+    log('PREVIOUS RUN CRASHED ON SEED '+(pending.split(':')[1]||'?'),'crit');
+    log('Tap SHOW LAST CRASH to see the exact source.','warn');
+    localStorage.setItem(LRUN,'ok');
   }
+}catch(e){}
 
-  document.getElementById('fz').onclick = function() {
-    if (mode === 'fuzz') return;
-    mode = 'fuzz';
-    stopFlag = false;
-    log('FUZZ from seed ' + nxt);
-    step();
-  };
+var last=localStorage.getItem(LSRC);if(last)srcEl.textContent=last;
 
-  document.getElementById('st').onclick = function() {
-    stopFlag = true;
-    killIframe();
-    setStatus('Stopping...');
-  };
-
-  document.getElementById('cl').onclick = function() {
-    out.textContent = '';
-  };
-
-  document.getElementById('cp').onclick = function() {
-    const t = srcEl.textContent;
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(t).then(() => log('copied.', 'ok'), () => log('copy blocked', 'warn'));
-    } else {
-      log('no clipboard', 'warn');
-    }
-  };
-
-  document.getElementById('crash').onclick = function() {
-    const c = localStorage.getItem(LCRASH) || '(none saved)';
-    showSrc(c);
-    log('LAST CRASH SOURCE shown in green box', 'ok');
-  };
-
-  document.getElementById('run').onclick = function() {
-    const code = ta.value;
-    if (!code.trim()) return;
-    try {
-      localStorage.setItem(LTA, code);
-      localStorage.setItem(LRUN, 'pending:manual');
-      localStorage.setItem(LCRASH, code);
-    } catch (e) {}
-    mode = 'run';
-    curSeed = null;
-    log('-- RUN n=' + HOTN);
-    runInIframe('"use strict";\n' + code, HOTN, 'manual');
-  };
-
-  ta.value = localStorage.getItem(LTA) || 'structuredClone([new Uint8Array(64)])';
-  ta.oninput = function() {
-    try { localStorage.setItem(LTA, ta.value); } catch (e) {}
-  };
-
-  log(VER + '   ms=' + HANGMS + '  n=' + HOTN);
-
-  try {
-    const pending = localStorage.getItem(LRUN) || '';
-    if (pending.indexOf('pending:') === 0) {
-      const parts = pending.split(':');
-      const seedStr = parts[1] || '?';
-      log('PREVIOUS RUN CRASHED ON SEED ' + seedStr, 'crit');
-      log('Tap SHOW LAST CRASH to see exact source.', 'warn');
-      localStorage.setItem(LRUN, 'ok');
-    }
-  } catch (e) {}
-
-  const last = localStorage.getItem(LSRC);
-  if (last) srcEl.textContent = last;
-
-  if (SEED0 !== null) {
-    mode = 'replay';
-    log('replay seed ' + SEED0);
-    runSeed(SEED0);
-  } else {
-    let from = 0;
-    const hb0 = localStorage.getItem(HB);
-    if (hb0) {
-      const mm = /^seed:(\d+):(\w+)/.exec(hb0);
-      if (mm) {
-        from = parseInt(mm[1], 10) + 1;
-        if (mm[2] === 'running') log('PREVIOUS RUN DIED ON SEED ' + (from - 1), 'bad');
-      }
-    }
-    nxt = from;
-    log('tap FUZZ, or paste a snippet and tap RUN');
-    setStatus('Ready');
-  }
+if(SEED0!==null){mode='replay';log('replay seed '+SEED0);runSeed(SEED0);}
+else{
+  var from=0,hb0=localStorage.getItem(HB);
+  if(hb0){var mm=/^seed:(\d+):(\w+)/.exec(hb0);if(mm){from=parseInt(mm[1],10)+1;if(mm[2]==='running')log('PREVIOUS RUN DIED ON SEED '+(from-1),'bad');}}
+  nxt=from;log('tap FUZZ, or paste a snippet and tap RUN');setStatus('Ready');
+}
 })();
 </script>
-</body>
-</html>
