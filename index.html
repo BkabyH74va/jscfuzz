@@ -1,5 +1,5 @@
 <!doctype html>
-<html><head><meta charset=utf-8><title>jscfuzz v20</title>
+<html><head><meta charset=utf-8><title>jscfuzz v21</title>
 <style>
 body{background:#111;color:#ddd;font:12px/1.4 ui-monospace,Menlo,monospace;margin:0;padding:8px}
 #log{white-space:pre-wrap;word-break:break-all}
@@ -9,7 +9,7 @@ body{background:#111;color:#ddd;font:12px/1.4 ui-monospace,Menlo,monospace;margi
 <div id=log></div><div id=box></div>
 <iframe id=ifr sandbox="allow-scripts allow-same-origin"></iframe>
 <script>
-var VER='v20';
+var VER='v21';
 var Q=new URLSearchParams(location.search);
 var MODE=+(Q.get('mode')||0);
 var MS=+(Q.get('ms')||6000);
@@ -86,8 +86,8 @@ function PRE(prog,sd){
  'function mk(s){return function(){s|=0;s=s+0x6D2B79F5|0;var t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}'+
  'function ri(R,n){var x=Math.floor(R()*n)%n;return x<0?0:x}'+
  'function W(f,fb){try{var r=f();TR.push("ok:"+(r===undefined?"u":typeof r));return r}catch(e){TR.push("x:"+(e&&e.name||"E"));return fb}}'+
- 'function T(p,ms){return Promise.race([p.then(function(){},function(){}),new Promise(function(r){setTimeout(r,ms)})])}'+
- 'async function A(t,p){try{await T(p,600);TR.push(t+":ok")}catch(e){TR.push(t+":x:"+(e&&e.name||"E"))}}'+
+ 'function T(p,ms){return Promise.race([p,new Promise(function(_,j){setTimeout(function(){j("TO")},ms)})])}'+
+ 'async function A(t,p){try{await T(p,400);TR.push(t+":ok")}catch(e){TR.push(t+":x:"+(e&&e.name||e||"E"))}}'+
  'function P(x){try{(new DOMParser()).parseFromString(x,"image/svg+xml")}catch(e){}return Promise.resolve(1)}'+
  BY+
  'var COLD=async function(){TR=[];R=mk(SEED);try{await (async function(){'+prog+'})()}catch(e){TR.push("top:"+(e&&e.name))}return TR.join(";")};'+
