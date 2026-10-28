@@ -176,7 +176,7 @@ function PRE(p,sd){
  'function T(p,ms){return Promise.race([p,new Promise(function(_,j){setTimeout(function(){j("TO")},ms)})])}'+
  'async function A(t,p){try{await T(p,400);TR.push(t+":ok")}catch(e){TR.push(t+":x:"+(e&&e.name||e||"E"))}}'+
  'function P(x){try{(new DOMParser()).parseFromString(x,"image/svg+xml")}catch(e){}return Promise.resolve(1)}'+
- 'var COLD=async function(){TR=[];R=mk(SEED);try{await (async function(){'+p+'})()}catch(e){TR.push("top:"+(e&&e.name))}return TR.join(";")};'+
+ 'var COLD=async function(){TR=[];R=mk(SEED);try{var rv=await (async function(){'+p+'})();if(rv!==undefined)return String(rv)}catch(e){TR.push("top:"+(e&&e.name))}return TR.join(";")};'+
  '(async function(){var c=await COLD();var h=await COLD();parent.postMessage({k:"r",cold:c,hot:h},"*")})()'+
  '<\/script>';
 }
