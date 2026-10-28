@@ -1,5 +1,5 @@
 <!doctype html>
-<html><head><meta charset=utf-8><title>jscfuzz v19</title>
+<html><head><meta charset=utf-8><title>jscfuzz v20</title>
 <style>
 body{background:#111;color:#ddd;font:12px/1.4 ui-monospace,Menlo,monospace;margin:0;padding:8px}
 #log{white-space:pre-wrap;word-break:break-all}
@@ -9,10 +9,10 @@ body{background:#111;color:#ddd;font:12px/1.4 ui-monospace,Menlo,monospace;margi
 <div id=log></div><div id=box></div>
 <iframe id=ifr sandbox="allow-scripts allow-same-origin"></iframe>
 <script>
-var VER='v19';
+var VER='v20';
 var Q=new URLSearchParams(location.search);
 var MODE=+(Q.get('mode')||0);
-var MS=+(Q.get('ms')||2000);
+var MS=+(Q.get('ms')||6000);
 var NL=+(Q.get('n')||10);
 var SHOW=Q.has('show')||Q.has('noexec');
 var BIG=Q.has('big'),SMALL=Q.has('small');
@@ -60,12 +60,12 @@ function rs(sd){
 function rs5(){
   var s='var AC=null;try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}';
   s+='var K=["png","gif","jpg","webp","ttf","woff","wav","mp3","svg","wasm"],i,t,b;';
-  s+='for(i=0;i<60;i++){t=K[ri(R,K.length)];b=by(t,R);';
-  s+='if(t==="png"||t==="gif"||t==="jpg"||t==="webp")await T(createImageBitmap(new Blob([b])),1500);';
-  s+='if(t==="ttf"||t==="woff")await T(new FontFace("f"+i,b).load(),1500);';
-  s+='if((t==="wav"||t==="mp3")&&AC)await T(AC.decodeAudioData(b.buffer.slice(0)),1500);';
-  s+='if(t==="svg")await T(P(new TextDecoder().decode(b)),1500);';
-  s+='if(t==="wasm")await T(WebAssembly.compile(b),1500);}';
+  s+='for(i=0;i<40;i++){t=K[ri(R,K.length)];b=by(t,R);';
+  s+='if(t==="png"||t==="gif"||t==="jpg"||t==="webp")await A(t,createImageBitmap(new Blob([b])));';
+  s+='if(t==="ttf"||t==="woff")await A(t,new FontFace("f"+i,b).load());';
+  s+='if((t==="wav"||t==="mp3")&&AC)await A(t,AC.decodeAudioData(b.buffer.slice(0)));';
+  s+='if(t==="svg")await A(t,P(new TextDecoder().decode(b)));';
+  s+='if(t==="wasm")await A(t,WebAssembly.compile(b));}';
   return s;
 }
 
@@ -87,6 +87,7 @@ function PRE(prog,sd){
  'function ri(R,n){var x=Math.floor(R()*n)%n;return x<0?0:x}'+
  'function W(f,fb){try{var r=f();TR.push("ok:"+(r===undefined?"u":typeof r));return r}catch(e){TR.push("x:"+(e&&e.name||"E"));return fb}}'+
  'function T(p,ms){return Promise.race([p.then(function(){},function(){}),new Promise(function(r){setTimeout(r,ms)})])}'+
+ 'async function A(t,p){try{await T(p,600);TR.push(t+":ok")}catch(e){TR.push(t+":x:"+(e&&e.name||"E"))}}'+
  'function P(x){try{(new DOMParser()).parseFromString(x,"image/svg+xml")}catch(e){}return Promise.resolve(1)}'+
  BY+
  'var COLD=async function(){TR=[];R=mk(SEED);try{await (async function(){'+prog+'})()}catch(e){TR.push("top:"+(e&&e.name))}return TR.join(";")};'+
@@ -118,7 +119,7 @@ async function step(){
  if(o.cold==='HANG')st='HANG/CRASH killed at '+MS+'ms';
  else if(o.cold===o.hot)st='same: '+o.cold;
  else{st='DIVERGE cold='+o.cold+' hot='+o.hot;try{localStorage.setItem('jscfuzz-div',prog)}catch(e){}}
- log.textContent=VER+' mode='+MODE+' ms='+MS+' n='+NL+'\n'+st+'\n'+log.textContent;
+ log.textContent=VER+' mode='+MODE+' ms='+MS+'\n'+st+'\n'+log.textContent;
  if(SHOW)return;
  seed++;step();
 }
