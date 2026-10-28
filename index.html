@@ -1,6 +1,6 @@
 <!doctype html>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>jscfuzz v16.3</title>
+<title>jscfuzz v16.4</title>
 <style>
 *{box-sizing:border-box}
 body{background:#0b0b0b;color:#ccc;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:8px}
@@ -24,8 +24,9 @@ iframe{display:none}
 <script>
 (function(){
 var P=new URLSearchParams(location.search);
-var VER='jscfuzz v16.3';
+var VER='jscfuzz v16.4';
 var SEED0=(P.get('seed')!==null&&P.get('seed')!=='')?parseInt(P.get('seed'),10):null;
+var FORCE=(P.get('mode')!==null&&P.get('mode')!=='')?parseInt(P.get('mode'),10):null;
 var HANGMS=parseInt(P.get('ms')||'8000',10);
 var HOTN=parseInt(P.get('n')||'10',10);
 var HB='jscfuzz-hb-v162',LSRC='jscfuzz-lastsrc-v162',LTA='jscfuzz-ta-v162',LRUN='jscfuzz-run-v162',LCRASH='jscfuzz-crash-v162';
@@ -40,31 +41,31 @@ function mulberry32(a){return function(){a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>
 
 function gen(seed){
   var R=mulberry32(seed>>>0),ri=function(n){var x=Math.floor(R()*n)%n;return x<0?0:x;},pk=function(a){return a[ri(a.length)];};
-  var o=[];
-  var mode=seed%5;
-  var i,j,e,pick,A,ops;
+  var o=[],mode=(FORCE!==null)?FORCE:seed%5,i,j,e,pick,A,ops;
 
   if(mode===0){
     var patterns=[
-      'let a=new Uint8Array(8);Object.setPrototypeOf(a,null);structuredClone(a)',
-      'let a=new ArrayBuffer(16,{maxByteLength:64});let v=new Uint8Array(a,0,32);a.resize(8);structuredClone(v)',
-      'let a=new ArrayBuffer(16);let v=new Uint8Array(a);a.transfer();structuredClone(v)',
-      'let a=new Uint8Array(8);a[Symbol.toStringTag]="Uint32Array";structuredClone(a)',
-      'let a=new Float64Array(4);a[0]=NaN;a[1]=Infinity;structuredClone(a)',
-      'let a=new BigInt64Array([0x7fffffffffffffffn]);structuredClone(a)',
-      'let a=new Uint8Array(8);Object.freeze(a);structuredClone({x:a})',
-      'let a={};let v=new Uint8Array(8);Object.defineProperty(a,"x",{get:function(){v.__proto__=null;return v}});structuredClone(a)',
-      'let ns=Object.create(null);Object.defineProperty(ns,"length",{value:0x100000000});let a=new Uint8Array(8);Object.setPrototypeOf(a,ns);structuredClone(a)',
-      'let a=new Uint8Array(4);a[Symbol.iterator]=function(){return{next:function(){return{value:0x41,done:false}}}};structuredClone(a)',
-      'let a=new Uint8Array(8);let p=new Proxy(a,{get:function(t,prop){if(prop==="length")return 0x7fffffff;return Reflect.get(t,prop)}});structuredClone(p)',
-      'let Ta=Uint8Array;Ta[Symbol.species]=function(len){return new Uint8Array(0x10000)};let a=new Ta(4);structuredClone(a)',
-      'let a=new Uint8Array(8);a.self=a;structuredClone(a)',
-      'let a=new Uint16Array(4);let b=a.slice(0,0x7fffffff);structuredClone(b)',
-      'let a=new Uint8Array(8);let b=a.subarray(0,0x7fffffff);structuredClone(b)'
+      'let a=new Uint8Array(8);Object.setPrototypeOf(a,null);structuredClone(a);return a.length',
+      'let a=new ArrayBuffer(16,{maxByteLength:64});let v=new Uint8Array(a,0,32);a.resize(8);structuredClone(v);return v.byteLength',
+      'let a=new ArrayBuffer(16);let v=new Uint8Array(a);a.transfer();structuredClone(v);return v.length',
+      'let a=new Uint8Array(8);a[Symbol.toStringTag]="Uint32Array";structuredClone(a);return a.length',
+      'let a=new Float64Array(4);a[0]=NaN;a[1]=Infinity;structuredClone(a);return a[0]',
+      'let a=new BigInt64Array([0x7fffffffffffffffn]);structuredClone(a);return a[0]',
+      'let a=new Uint8Array(8);Object.freeze(a);structuredClone({x:a});return a.length',
+      'let a={};let v=new Uint8Array(8);Object.defineProperty(a,"x",{get:function(){v.__proto__=null;return v}});structuredClone(a);return 1',
+      'let ns=Object.create(null);Object.defineProperty(ns,"length",{value:0x100000000});let a=new Uint8Array(8);Object.setPrototypeOf(a,ns);structuredClone(a);return a.length',
+      'let a=new Uint8Array(4);a[Symbol.iterator]=function(){return{next:function(){return{value:0x41,done:false}}}};structuredClone(a);return a.length',
+      'let a=new Uint8Array(8);let p=new Proxy(a,{get:function(t,prop){if(prop==="length")return 0x7fffffff;return Reflect.get(t,prop)}});structuredClone(p);return 1',
+      'let Ta=Uint8Array;Ta[Symbol.species]=function(len){return new Uint8Array(0x10000)};let a=new Ta(4);structuredClone(a);return a.length',
+      'let a=new Uint8Array(8);a.self=a;structuredClone(a);return a.length',
+      'let a=new Uint16Array(4);let b=a.slice(0,0x7fffffff);structuredClone(b);return b.length',
+      'let a=new Uint8Array(8);let b=a.subarray(0,0x7fffffff);structuredClone(b);return b.length',
+      'let r=Proxy.revocable({},{});r.revoke();structuredClone(r.proxy);return 1',
+      'let b=new ArrayBuffer(8);let m=new Map([[b,1]]);b.transfer();structuredClone(m);return m.size'
     ];
     o.push('var E=[],W=function(f,d){try{return f()}catch(e){E.push(e.name);return d}};');
     pick=2+ri(3);
-    for(i=0;i<pick;i++) o.push('W(function(){return '+pk(patterns)+'},0);');
+    for(i=0;i<pick;i++) o.push('W(function(){return (function(){'+pk(patterns)+'})()},0);');
     o.push('return E.join(";")+"|ok";');
   }
   else if(mode===1){
@@ -90,27 +91,27 @@ function gen(seed){
   else if(mode===3){
     o.push('var E=[],W=function(f,d){try{return f()}catch(e){E.push(e.name);return d}};');
     var arrOps=[
-      'let a=new Uint8Array(8);a.fill(0x41);return a.reverse()',
-      'let a=new Uint8Array(8);a.sort();return a',
-      'let a=new Uint8Array([3,1,4,1,5]);a.sort();return a',
-      'let a=new Uint8Array(8);let b=new Uint8Array(4);a.set(b,0);return a',
-      'let a=new Uint8Array(8);let b=new Uint16Array(4);a.set(b,0);return a',
-      'let a=new Uint8Array(4);return a.slice(0,0x7fffffff)',
-      'let a=new Uint8Array(4);return a.subarray(0,0x7fffffff)',
-      'let a=new Uint8Array(4);a.copyWithin(0,2);return a',
-      'let a=new Uint8Array([1,2,3]);return Array.from(a)',
+      'let a=new Uint8Array(8);a.fill(0x41);a.reverse();return a[0]',
+      'let a=new Uint8Array(8);a.sort();return a[0]',
+      'let a=new Uint8Array([3,1,4,1,5]);a.sort();return a[0]',
+      'let a=new Uint8Array(8);let b=new Uint8Array(4);a.set(b,0);return a.length',
+      'let a=new Uint8Array(8);let b=new Uint16Array(4);a.set(b,0);return a.length',
+      'let a=new Uint8Array(4);return a.slice(0,0x7fffffff).length',
+      'let a=new Uint8Array(4);return a.subarray(0,0x7fffffff).length',
+      'let a=new Uint8Array(4);a.copyWithin(0,2);return a[0]',
+      'let a=new Uint8Array([1,2,3]);return Array.from(a).length',
       'let a=new Uint8Array(4);return a.indexOf(0)',
       'let a=new Uint8Array(4);return a.includes(0)',
       'let a=new Uint8Array(4);return a.find(function(x){return x===0})',
       'let a=new Uint8Array(4);return a.every(function(x){return x===0})',
       'let a=new Uint8Array(4);return a.some(function(x){return x!==0})',
-      'let a=new Uint8Array(4);return a.map(function(x){return x+1})',
-      'let a=new Uint8Array(4);return a.filter(function(x){return x===0})',
+      'let a=new Uint8Array(4);return a.map(function(x){return x+1}).length',
+      'let a=new Uint8Array(4);return a.filter(function(x){return x===0}).length',
       'let a=new Uint8Array(4);return a.reduce(function(a,b){return a+b},0)',
       'let a=new Uint8Array(4);return a.join(",")'
     ];
     pick=2+ri(4);
-    for(i=0;i<pick;i++) o.push('W(function(){return '+pk(arrOps)+'},0);');
+    for(i=0;i<pick;i++) o.push('W(function(){return (function(){'+pk(arrOps)+'})()},0);');
     o.push('return E.join(";")+"|ok";');
   }
   else {
@@ -196,11 +197,10 @@ function runSeed(seed){
   log('-- seed '+seed);setStatus('Running seed '+seed+'...');
   runInIframe('"use strict";\n'+gen(seed),HOTN,seed);
 }
-
 function step(){if(stopFlag){mode='idle';log('stopped.');setStatus('Stopped');return;}runSeed(nxt++);}
 function finish(){if(mode==='fuzz'&&!stopFlag){setTimeout(step,50);}else{mode='idle';setStatus('Idle');log('done.','dim');}}
 
-document.getElementById('fz').onclick=function(){if(mode==='fuzz')return;mode='fuzz';stopFlag=false;log('FUZZ from seed '+nxt);step();};
+document.getElementById('fz').onclick=function(){if(mode==='fuzz')return;mode='fuzz';stopFlag=false;log('FUZZ from seed '+nxt+(FORCE!==null?' [mode '+FORCE+']':''));step();};
 document.getElementById('st').onclick=function(){stopFlag=true;killIframe();setStatus('Stopping...');};
 document.getElementById('cl').onclick=function(){out.textContent='';};
 document.getElementById('cp').onclick=function(){
@@ -222,8 +222,7 @@ document.getElementById('run').onclick=function(){
 ta.value=localStorage.getItem(LTA)||'structuredClone([new Uint8Array(64)])';
 ta.oninput=function(){try{localStorage.setItem(LTA,ta.value);}catch(e){}};
 
-log(VER+'   ms='+HANGMS+'  n='+HOTN);
-
+log(VER+'   ms='+HANGMS+'  n='+HOTN+(FORCE!==null?'  [mode '+FORCE+']':''));
 try{
   var pending=localStorage.getItem(LRUN)||'';
   if(pending.indexOf('pending:')===0){
@@ -232,7 +231,6 @@ try{
     localStorage.setItem(LRUN,'ok');
   }
 }catch(e){}
-
 var last=localStorage.getItem(LSRC);if(last)srcEl.textContent=last;
 
 if(SEED0!==null){mode='replay';log('replay seed '+SEED0);runSeed(SEED0);}
