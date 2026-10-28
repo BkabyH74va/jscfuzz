@@ -1,16 +1,16 @@
 <!doctype html>
-<html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>jscfuzz v28</title>
+<html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>jscfuzz v29</title>
 <style>
 *{box-sizing:border-box}
 body{background:#000;color:#ddd;font:12px/1.45 ui-monospace,Menlo,monospace;margin:0;padding:8px 8px 28px}
 #ver{color:#6cf;font-size:11.5px;font-weight:700;letter-spacing:.06em;margin-bottom:6px}
 .pane{border:1px solid #333;border-radius:8px;padding:8px;white-space:pre-wrap;word-break:break-all;overflow:auto;background:#0b0b0b}
-#log{height:50vh;font-size:11.5px}
+#log{height:46vh;font-size:11.5px}
 #bar{display:flex;gap:6px;margin:8px 0;flex-wrap:wrap}
 button{background:#1c1c1c;color:#ddd;border:1px solid #444;border-radius:8px;padding:10px 14px;font:600 13px ui-monospace,Menlo,monospace;letter-spacing:.04em}
 button:active{background:#333}
-#box{background:#08240a;color:#9f9;height:18vh;font-size:11px;border-color:#1c4a1c}
-#prog{height:16vh;font-size:11px;color:#ddd}
+#box{background:#08240a;color:#9f9;height:22vh;font-size:11px;border-color:#1c4a1c}
+#prog{height:14vh;font-size:11px;color:#ddd}
 #stat{color:#777;font-size:11.5px;margin-top:8px}
 #ifr{position:absolute;left:-10px;top:0;width:1px;height:1px;border:0;opacity:.01}
 </style></head><body>
@@ -24,7 +24,7 @@ button:active{background:#333}
 <div id=stat>Idle</div>
 <iframe id=ifr sandbox="allow-scripts allow-same-origin"></iframe>
 <script>
-var VER='v28';
+var VER='v29';
 var Q=new URLSearchParams(location.search);
 var MODE=+(Q.get('mode')||0);
 var MS=+(Q.get('ms')||6000);
@@ -46,7 +46,6 @@ function u16(a,o,v){a[o]=v>>>8&255;a[o+1]=v&255}
 function put(a,o,s){for(var i=0;i<s.length;i++)a[o+i]=s.charCodeAt(i)&255}
 function L(s){log.textContent+=(log.textContent?'\n':'')+s;log.scrollTop=log.scrollHeight}
 function S(s){stat.textContent=VER+' | '+s}
-function arrlit(b){return 'new Uint8Array(['+Array.prototype.join.call(b,',')+'])'}
 
 var PAT=[
 function(){return 'var a=new Uint8Array(SZ);a[0]=1;return structuredClone(a)'},
@@ -72,12 +71,12 @@ function(){return 'var v=new Uint8Array(SZ);return structuredClone(new Date())&&
 ];
 
 function rs(sd){
-  var R=mk(sd),s='var SZ='+sz()+';';
+  var R=mk(sd),s='"use strict";\nvar SZ='+sz()+',E=[],W=function(f,d){try{return f()}catch(e){E.push(e.name);return d}};\n';
   for(var i=0;i<NL;i++){
     var p=(MODE===1?PAT[i%PAT.length]:PAT[ri(R,PAT.length)])();
-    s+='W(function(){return (function(){'+p+'})()},0);';
+    s+='W(function(){return (function(){'+p+'})()},0);\n';
   }
-  return s;
+  return s+'return E.join(";")+"|ok";';
 }
 
 function mut(a,R){
@@ -133,30 +132,28 @@ function by(t,R){
         t==="wasm"?mkwasm(R):mksvg(R);
   return mut(a,R);
 }
-function wrap(t,b){
-  var x=arrlit(b);
-  if(t==="ttf"||t==="woff")return 'new FontFace("f0",'+x+').load()';
-  if(t==="wav"||t==="mp3")return 'new AudioContext().decodeAudioData('+x+'.buffer)';
-  if(t==="svg")return 'new DOMParser().parseFromString(new TextDecoder().decode('+x+'),"image/svg+xml")';
-  if(t==="wasm")return 'WebAssembly.compile('+x+')';
-  return 'createImageBitmap(new Blob(['+x+']))';
+function wrapS(t){
+  if(t==="ttf"||t==="woff")return 'new FontFace("f0",new Uint8Array(64)).load()';
+  if(t==="wav"||t==="mp3")return 'new AudioContext().decodeAudioData(new Uint8Array(64).buffer)';
+  if(t==="svg")return 'new DOMParser().parseFromString("<svg/>","image/svg+xml")';
+  if(t==="wasm")return 'WebAssembly.compile(new Uint8Array(64))';
+  return 'createImageBitmap(new Blob([new Uint8Array(64)]))';
 }
 
 function rs5(sd){
-  var R=mk(sd),L2=[],s='var AC=null;try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}',ex='';
-  s+='if(!window.FontFace)TR.push("noFF");var t,b,i=0;';
+  var R=mk(sd),s='"use strict";\nvar AC=null;try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}\n';
+  s+='if(!window.FontFace)TR.push("noFF");\nvar t,b,i=0;\n',ex='';
   for(var i=0;i<30;i++){
-    var t=K[ri(R,K.length)],b=by(t,R),h=hex(b);
-    L2.push(t+' '+h);
-    if(i===0)ex=wrap(t,b);
-    s+='t="'+t+'";b=hx("'+h+'");i='+i+';';
-    s+='if(t==="png"||t==="gif"||t==="jpg"||t==="webp")await A(t,createImageBitmap(new Blob([b])));';
-    s+='if((t==="ttf"||t==="woff")&&window.FontFace)await A(t,new FontFace("f"+i,b).load());';
-    s+='if((t==="wav"||t==="mp3")&&AC)await A(t,AC.decodeAudioData(b.buffer.slice(0)));';
-    s+='if(t==="svg")await A(t,P(new TextDecoder().decode(b)));';
-    s+='if(t==="wasm")await A(t,WebAssembly.compile(b));';
+    var t=K[ri(R,K.length)],h=hex(by(t,R));
+    if(i===0)ex=wrapS(t);
+    s+='t="'+t+'";\nb=hx("'+h+'");\ni='+i+';\n';
+    s+='if(t==="png"||t==="gif"||t==="jpg"||t==="webp")await A(t,createImageBitmap(new Blob([b])));\n';
+    s+='if((t==="ttf"||t==="woff")&&window.FontFace)await A(t,new FontFace("f"+i,b).load());\n';
+    s+='if((t==="wav"||t==="mp3")&&AC)await A(t,AC.decodeAudioData(b.buffer.slice(0)));\n';
+    s+='if(t==="svg")await A(t,P(new TextDecoder().decode(b)));\n';
+    s+='if(t==="wasm")await A(t,WebAssembly.compile(b));\n';
   }
-  return {code:s,list:L2,expr:ex};
+  return {code:s,expr:ex};
 }
 
 function PRE(p,sd){
@@ -190,7 +187,7 @@ async function doSeed(){
  runOpen=true;
  var p,d;
  if(MODE===5){var o5=rs5(seed);p=o5.code;d=o5.expr}
- else{p=rs(seed);d='structuredClone([new Uint8Array('+sz()+')])'}
+ else{p=rs(seed);d='structuredClone([new Uint8Array(64)])'}
  box.textContent=p;prog.textContent=d;
  try{localStorage.setItem('jscfuzz-prog',p);localStorage.setItem('jscfuzz-seed',String(seed))}catch(e){}
  S('Running seed '+seed+'...');
