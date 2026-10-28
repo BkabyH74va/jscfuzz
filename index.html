@@ -1,6 +1,6 @@
 <!doctype html>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>jscfuzz v30.1</title>
+<title>jscfuzz v30.2</title>
 <style>
 body{background:#000;color:#aaa;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:8px}
 #out{white-space:pre-wrap;word-break:break-all;max-height:55vh;overflow:auto;color:#aaa}
@@ -202,12 +202,13 @@ async function go(useManual){
  if(runOpen)return;
  runOpen=true;
  activeSeed=useManual?'MANUAL':seed;
+ try{localStorage.setItem('LASEED',String(activeSeed))}catch(e){}
  var p;
  if(useManual&&ta.value.trim()){p=ta.value.trim();}
  else if(MODE===5){var o5=rs5(seed);p=o5.code;}
  else{p=rs(seed);}
  src.textContent='-- seed '+activeSeed+'\n'+p;
- try{localStorage.setItem('LSRC',p);localStorage.setItem('LRUN',String(seed));localStorage.setItem('LASEED',String(activeSeed))}catch(e){}
+ try{localStorage.setItem('LSRC',p);localStorage.setItem('LRUN',String(seed))}catch(e){}
  hb();
  status.className='run';status.textContent='Running seed '+activeSeed+'...';
  var o=await runInIframe(p,seed,MS);
@@ -222,6 +223,7 @@ async function go(useManual){
  if(!running){status.className='';status.textContent='Stopped at seed '+activeSeed+'.';try{localStorage.setItem('LASEED',String(activeSeed))}catch(e){}return;}
  seed++;
  activeSeed=seed;
+ try{localStorage.setItem('LASEED',String(activeSeed))}catch(e){}
  status.className='run';status.textContent='Running seed '+activeSeed+'...';
  if(running)setTimeout(function(){go(false)},0);
 }
@@ -242,7 +244,7 @@ try{
  var pp=localStorage.getItem('LSRC');
  if(pp!==null)src.textContent=pp;
  if(ps!==null&&!Q.has('seed')){seed=+ps+1;}
- if(pa!==null){activeSeed=pa;}
+ if(pa!==null){activeSeed=+pa;}
 }catch(e){}
 if(!ta.value.trim())ta.value='structuredClone([new Uint8Array(64)])';
 
