@@ -200,13 +200,12 @@ function runInIframe(p,sd,ms){
 async function go(useManual){
  if(runOpen)return;
  runOpen=true;
- var p,expr;
- if(useManual&&ta.value.trim()){p=ta.value.trim();expr='manual';}
- else if(MODE===5){var o5=rs5(seed);p=o5.code;expr=o5.expr;}
- else{p=rs(seed);expr='structuredClone([new Uint8Array(64)])';}
+ var p;
+ if(useManual&&ta.value.trim()){p=ta.value.trim();}
+ else if(MODE===5){var o5=rs5(seed);p=o5.code;}
+ else{p=rs(seed);}
  src.textContent='-- seed '+(useManual?'MANUAL':seed)+'\n'+p;
- ta.value=expr;
- try{localStorage.setItem('LSRC',p);localStorage.setItem('LTA',ta.value);localStorage.setItem('LRUN',String(seed))}catch(e){}
+ try{localStorage.setItem('LSRC',p);localStorage.setItem('LRUN',String(seed))}catch(e){}
  hb();
  status.textContent='Running seed '+(useManual?'MANUAL':seed)+'...';
  var o=await runInIframe(p,seed,MS);
@@ -234,12 +233,11 @@ window.addEventListener('error',function(e){out.textContent='PAGE ERROR: '+e.mes
 
 try{
  var ps=localStorage.getItem('LRUN');
- var pt=localStorage.getItem('LTA');
  var pp=localStorage.getItem('LSRC');
- if(pt!==null)ta.value=pt;
  if(pp!==null)src.textContent=pp;
  if(ps!==null&&!Q.has('seed')){out.textContent='PREVIOUS RUN STOPPED ON SEED '+ps+'\n'+out.textContent;seed=+ps+1;}
 }catch(e){}
+if(!ta.value.trim())ta.value='structuredClone([new Uint8Array(64)])';
 
 if(!running)status.textContent='Ready. mode='+MODE+' ms='+MS;
 </script>
