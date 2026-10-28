@@ -1,6 +1,6 @@
 <!doctype html>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>jscfuzz v13</title>
+<title>jscfuzz v14</title>
 <style>
 *{box-sizing:border-box}
 body{background:#0b0b0b;color:#ccc;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:8px}
@@ -20,7 +20,7 @@ textarea{width:100%;height:110px;background:#000;color:#ffd84d;border:1px solid 
 <script>
 (function(){
 var P=new URLSearchParams(location.search);
-var VER='jscfuzz v13',PV='13';
+var VER='jscfuzz v14',PV='14';
 var SMALL=P.has('small'),BIG=P.has('big'),SWEEP=P.has('sweep'),SWEEP2=P.has('sweep2'),PROBE=P.has('probe');
 var SHOW=P.has('show')||P.has('noexec');
 var SEED0=(P.get('seed')!==null&&P.get('seed')!=='')?parseInt(P.get('seed'),10):null;
@@ -98,32 +98,32 @@ function gen(seed){
 }
 
 var PR=[
- 'var b=new ArrayBuffer(16);structuredClone([b,b],{transfer:[b,b]});b.byteLength;',
- 'var b=new ArrayBuffer(16);var v=new Uint8Array(b);structuredClone([v,v],{transfer:[b]});v.length;',
- 'var b=new ArrayBuffer(16);var v=new Uint8Array(b);var o={get x(){b.transfer();return v[0]}};o.x;structuredClone(v);',
- 'function f(){return arguments.length}var a=new Array(500000).fill(1);f.apply(null,a);',
- 'function f(){return arguments.length}var a=new Array(500000).fill(1);f(...a);',
- 'function f(n){return n?f(n-1)+1:0}for(var i=0;i<500;i++)f(1000);f(300000);',
- 'function s(a){return a.sort(function(x,y){if(a.length<400)s(a);return x-y})}var a=[];for(var i=0;i<500;i++)a.push((i*7919)%500);s(a);a.length;',
- 'var a=[1,2,3];var r=a.map(function(x){if(a.length<10)a.push(x);return x*2});r.length;',
- 'var a=new Array(1000).fill(0);a.copyWithin(-10,-5);a.fill(7,-3);a.length;',
- 'var b=new ArrayBuffer(64,{maxByteLength:1024});var v=new Uint8Array(b,32,16);b.resize(8);v[0];v[15];b.resize(1024);v[15];',
- 'var b=new ArrayBuffer(16,{maxByteLength:64});var d=new DataView(b,8,8);b.resize(8);d.getUint8(0);',
- '"a,b,c".repeat(1000).split(/,/).length;',
- 'var s="a".repeat(1<<20);s.split(/(?=a)/).length;',
- 'var n=0;function*g(){while(n++<100000)yield n}Array.from(g()).length;',
- 'var o={};var a=[];for(var i=0;i<50000;i++)a.push(o);structuredClone(a).length;',
- 'var m=new Map();var c=m;for(var i=0;i<5000;i++){var x=new Map();c.set(1,x);c=x}structuredClone(m);',
- 'var o={toJSON:function(){o.self=o;return 1}};JSON.stringify(o);',
- 'var o={valueOf:function(){o.x=o.x+1;return o.x}};o.x=0;(o+1);(o*1);',
- 'var t={};var p=new Proxy(t,{get:function(o,k){if(k!=="n")o[k]=1;return o[k]}});p.a;p.b;p.c;',
- 'var a=new Array(1000);a[0]=5;a[999]=1;a.sort();a.length;',
- 'var a=[];for(var i=0;i<20000;i++)a.push((i*104729)%20000);var c=0;a.sort(function(x,y){if(c++%100===0)throw new Error("x");return x-y});',
- 'var a=new Uint8Array(1024);for(var i=0;i<1024;i++)a[i]=i;a.set(a.subarray(0,1000),24);a[1023];',
- 'var a=new Uint8Array(256);a.set(a,1);a[255];',
- 'var s="";for(var i=0;i<200000;i++)s+="a";s.length;',
- 'var s="abcdefgh".repeat(1000);s.substring(5,2).length;s.slice(-5).length;',
- 'function f(){return arguments.length}f.apply(null,new Uint8Array(200000));'
+ 'var r=Proxy.revocable({},{});r.revoke();r.proxy.x;',
+ 'var r=Proxy.revocable({a:1},{});r.revoke();JSON.stringify(r.proxy);',
+ 'var r=Proxy.revocable({},{});var m=new Map();m.set(r.proxy,1);r.revoke();m.get(r.proxy);',
+ 'var r=Proxy.revocable({},{});var a=[1,2,3];a.sort(function(){return r.proxy.x});',
+ 'var r=Proxy.revocable({a:1},{});r.revoke();structuredClone(r.proxy);',
+ 'var t=new Uint8Array(16);var p=new Proxy(t,{});p.length;p[0]=1;structuredClone(p);',
+ 'var p=new Proxy(function(){},{getPrototypeOf:function(){return null}});({}) instanceof p;',
+ 'class A extends Array{static get [Symbol.species](){return Uint8Array}}var a=new A();a.push(1,2);a.concat(a).length;',
+ 'var o={length:2,0:"a",1:"b",[Symbol.isConcatSpreadable]:true};[].concat(o).length;',
+ 'var b=new ArrayBuffer(8);var m=new Map([[b,1]]);b.transfer();structuredClone(m);',
+ 'var b=new ArrayBuffer(8);b.transfer();JSON.stringify(b);',
+ 'var b=new ArrayBuffer(8);var o={get x(){b.transfer();return 1}};structuredClone(o);',
+ 'function f(){return arguments}var g=f(1,2,3);g.length;g[0];structuredClone(g);',
+ 'function f(){var s=0;for(var i=0;i<arguments.length;i++)s+=arguments[i];return s}for(var i=0;i<20000;i++)f(1,2,3);f(1,2,3,4,5);',
+ 'var a=[3,1,2];a.sort(function(){return"x"});a.length;',
+ 'var a=[];for(var i=0;i<20000;i++)a.push((i*7919)%20000);a.sort(function(x,y){return x-y});a[0];',
+ '"aaa".repeat(1000).replace(/a/g,"$&$&").length;',
+ 'String.raw({raw:"a".repeat(100000)}).length;',
+ 'var o={};Object.assign(o,{get a(){delete o.a;return 1},get b(){return 2}});',
+ 'var o={length:10};for(var i=0;i<10;i++)o[i]=i;Array.from({get length(){return o.length},get 0(){o.length=20;return 0}}).length;',
+ 'var a=new Int32Array([3,1,2]);a.sort(function(x,y){return x-y});a[0];',
+ 'var a=new Float64Array(10000);for(var i=0;i<10000;i++)a[i]=(i%7)?i:NaN;a.sort();a[0];',
+ 'var b=new ArrayBuffer(16,{maxByteLength:64});var d=new DataView(b);for(var i=0;i<1000;i++){b.resize(16);d.getUint8(0);b.resize(8);d.getUint8(0)}',
+ 'var b=new ArrayBuffer(8);structuredClone({a:1},{transfer:[b]});b.byteLength;',
+ 'var a=new Array(100000);a[0]=1;a[99999]=2;a.reduce(function(x,y){return x+y},0);',
+ 'var m=new Map([[1,1],[2,2]]);for(var kv of m){m.delete(kv[0])}m.size;'
 ];
 
 var SW_WR=['plain','array','object','map','set'],SW_TY=['Uint8Array','Float64Array','DataView'],SW_SZ=['2**16','2**20','2**24','2**26','2**28'];
