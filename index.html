@@ -1,10 +1,11 @@
 <!doctype html>
-<html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>jscfuzz v26</title>
+<html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>jscfuzz v27</title>
 <style>
 *{box-sizing:border-box}
 body{background:#000;color:#ddd;font:12px/1.45 ui-monospace,Menlo,monospace;margin:0;padding:8px 8px 28px}
+#ver{color:#6cf;font-size:11.5px;font-weight:700;letter-spacing:.06em;margin-bottom:6px}
 .pane{border:1px solid #333;border-radius:8px;padding:8px;white-space:pre-wrap;word-break:break-all;overflow:auto;background:#0b0b0b}
-#log{height:52vh;font-size:11.5px}
+#log{height:50vh;font-size:11.5px}
 #bar{display:flex;gap:6px;margin:8px 0;flex-wrap:wrap}
 button{background:#1c1c1c;color:#ddd;border:1px solid #444;border-radius:8px;padding:10px 14px;font:600 13px ui-monospace,Menlo,monospace;letter-spacing:.04em}
 button:active{background:#333}
@@ -13,6 +14,7 @@ button:active{background:#333}
 #stat{color:#777;font-size:11.5px;margin-top:8px}
 #ifr{position:absolute;left:-10px;top:0;width:1px;height:1px;border:0;opacity:.01}
 </style></head><body>
+<div id=ver></div>
 <div id=log class=pane></div>
 <div id=bar>
 <button id=bFuzz>FUZZ</button><button id=bStop>STOP</button><button id=bRun>RUN</button><button id=bCopy>COPY</button><button id=bClr>CLR</button><button id=bCrash>SHOW LAST CRASH</button>
@@ -22,16 +24,18 @@ button:active{background:#333}
 <div id=stat>Idle</div>
 <iframe id=ifr sandbox="allow-scripts allow-same-origin"></iframe>
 <script>
-var VER='v26';
+var VER='v27';
 var Q=new URLSearchParams(location.search);
 var MODE=+(Q.get('mode')||0);
 var MS=+(Q.get('ms')||6000);
 var NL=+(Q.get('n')||10);
 var BIG=Q.has('big'),SMALL=Q.has('small');
 var START=Q.has('seed')?+Q.get('seed'):0;
-var ifr=document.getElementById('ifr'),log=document.getElementById('log'),box=document.getElementById('box'),prog=document.getElementById('prog'),stat=document.getElementById('stat');
+var ifr=document.getElementById('ifr'),log=document.getElementById('log'),box=document.getElementById('box'),prog=document.getElementById('prog'),stat=document.getElementById('stat'),ver=document.getElementById('ver');
 var seed=START,running=false,runOpen=false,timer=0,lastCrash='';
 var K=["png","gif","jpg","webp","ttf","woff","wav","mp3","svg","wasm"];
+
+ver.textContent='jscfuzz '+VER+'  |  mode '+MODE;
 
 function mk(s){return function(){s|=0;s=s+0x6D2B79F5|0;var t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 function ri(R,n){var x=Math.floor(R()*n)%n;return x<0?0:x}
@@ -41,7 +45,7 @@ function u32(a,o,v){a[o]=v>>>24&255;a[o+1]=v>>>16&255;a[o+2]=v>>>8&255;a[o+3]=v&
 function u16(a,o,v){a[o]=v>>>8&255;a[o+1]=v&255}
 function put(a,o,s){for(var i=0;i<s.length;i++)a[o+i]=s.charCodeAt(i)&255}
 function L(s){log.textContent+=(log.textContent?'\n':'')+s;log.scrollTop=log.scrollHeight}
-function S(s){stat.textContent=s}
+function S(s){stat.textContent=VER+' | '+s}
 function arrlit(b){return 'new Uint8Array(['+Array.prototype.join.call(b,',')+'])'}
 
 var PAT=[
@@ -218,5 +222,6 @@ try{
  var ps=localStorage.getItem('jscfuzz-seed');
  if(ps!==null){L('PREVIOUS RUN STOPPED ON SEED '+ps);S('Idle. Press FUZZ.')}
 }catch(e){}
+S('Idle.');
 </script>
 </body></html>
