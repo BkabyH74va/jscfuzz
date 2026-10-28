@@ -1,5 +1,5 @@
 <!doctype html>
-<html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>jscfuzz v25</title>
+<html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>jscfuzz v26</title>
 <style>
 *{box-sizing:border-box}
 body{background:#000;color:#ddd;font:12px/1.45 ui-monospace,Menlo,monospace;margin:0;padding:8px 8px 28px}
@@ -22,7 +22,7 @@ button:active{background:#333}
 <div id=stat>Idle</div>
 <iframe id=ifr sandbox="allow-scripts allow-same-origin"></iframe>
 <script>
-var VER='v25';
+var VER='v26';
 var Q=new URLSearchParams(location.search);
 var MODE=+(Q.get('mode')||0);
 var MS=+(Q.get('ms')||6000);
@@ -42,6 +42,7 @@ function u16(a,o,v){a[o]=v>>>8&255;a[o+1]=v&255}
 function put(a,o,s){for(var i=0;i<s.length;i++)a[o+i]=s.charCodeAt(i)&255}
 function L(s){log.textContent+=(log.textContent?'\n':'')+s;log.scrollTop=log.scrollHeight}
 function S(s){stat.textContent=s}
+function arrlit(b){return 'new Uint8Array(['+Array.prototype.join.call(b,',')+'])'}
 
 var PAT=[
 function(){return 'var a=new Uint8Array(SZ);a[0]=1;return structuredClone(a)'},
@@ -128,13 +129,22 @@ function by(t,R){
         t==="wasm"?mkwasm(R):mksvg(R);
   return mut(a,R);
 }
+function wrap(t,b){
+  var x=arrlit(b);
+  if(t==="ttf"||t==="woff")return 'new FontFace("f0",'+x+').load()';
+  if(t==="wav"||t==="mp3")return 'new AudioContext().decodeAudioData('+x+'.buffer)';
+  if(t==="svg")return 'new DOMParser().parseFromString(new TextDecoder().decode('+x+'),"image/svg+xml")';
+  if(t==="wasm")return 'WebAssembly.compile('+x+')';
+  return 'createImageBitmap(new Blob(['+x+']))';
+}
 
 function rs5(sd){
-  var R=mk(sd),L2=[],s='var AC=null;try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}';
+  var R=mk(sd),L2=[],s='var AC=null;try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}',ex='';
   s+='if(!window.FontFace)TR.push("noFF");var t,b;';
   for(var i=0;i<30;i++){
-    var t=K[ri(R,K.length)],h=hex(by(t,R));
+    var t=K[ri(R,K.length)],b=by(t,R),h=hex(b);
     L2.push(t+' '+h);
+    if(i===0)ex=wrap(t,b);
     s+='t="'+t+'";b=hx("'+h+'");';
     s+='if(t==="png"||t==="gif"||t==="jpg"||t==="webp")await A(t,createImageBitmap(new Blob([b])));';
     s+='if((t==="ttf"||t==="woff")&&window.FontFace)await A(t,new FontFace("f"+i,b).load());';
@@ -142,7 +152,7 @@ function rs5(sd){
     s+='if(t==="svg")await A(t,P(new TextDecoder().decode(b)));';
     s+='if(t==="wasm")await A(t,WebAssembly.compile(b));';
   }
-  return {code:s,list:L2};
+  return {code:s,list:L2,expr:ex};
 }
 
 function PRE(p,sd){
@@ -175,8 +185,8 @@ async function doSeed(){
  if(runOpen)return;
  runOpen=true;
  var p,d;
- if(MODE===5){var o5=rs5(seed);p=o5.code;d=o5.list.map(function(x){return x.length>110?x.slice(0,110)+'...':x}).join('\n')}
- else{p=rs(seed);d='mode '+MODE+' seed '+seed}
+ if(MODE===5){var o5=rs5(seed);p=o5.code;d=o5.expr}
+ else{p=rs(seed);d='structuredClone([new Uint8Array('+sz()+')])'}
  box.textContent=p;prog.textContent=d;
  try{localStorage.setItem('jscfuzz-prog',p);localStorage.setItem('jscfuzz-seed',String(seed))}catch(e){}
  S('Running seed '+seed+'...');
