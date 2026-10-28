@@ -1,34 +1,46 @@
 <!doctype html>
-<html><head><meta charset=utf-8><title>jscfuzz v23</title>
+<html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>jscfuzz v24</title>
 <style>
-body{background:#111;color:#ddd;font:12px/1.4 ui-monospace,Menlo,monospace;margin:0;padding:8px}
-#log{white-space:pre-wrap;word-break:break-all}
-#box{white-space:pre-wrap;word-break:break-all;background:#08240a;color:#9f9;padding:6px;margin-top:8px;font-size:11px;max-height:46vh;overflow:auto}
-#ifr{position:absolute;left:-10px;width:1px;height:1px;border:0;opacity:.01}
+*{box-sizing:border-box}
+body{background:#000;color:#ddd;font:12px/1.45 ui-monospace,Menlo,monospace;margin:0;padding:8px 8px 28px}
+.pane{border:1px solid #333;border-radius:8px;padding:8px;white-space:pre-wrap;word-break:break-all;overflow:auto;background:#0b0b0b}
+#log{height:52vh;font-size:11.5px}
+#bar{display:flex;gap:6px;margin:8px 0;flex-wrap:wrap}
+button{background:#1c1c1c;color:#ddd;border:1px solid #444;border-radius:8px;padding:10px 14px;font:600 13px ui-monospace,Menlo,monospace;letter-spacing:.04em}
+button:active{background:#333}
+#box{background:#08240a;color:#9f9;height:18vh;font-size:11px;border-color:#1c4a1c}
+#prog{height:16vh;font-size:11px;color:#9ad}
+#stat{color:#777;font-size:11.5px;margin-top:8px}
 </style></head><body>
-<div id=log></div><div id=box></div>
+<div id=log class=pane></div>
+<div id=bar>
+<button id=bFuzz>FUZZ</button><button id=bStop>STOP</button><button id=bRun>RUN</button><button id=bCopy>COPY</button><button id=bClr>CLR</button><button id=bCrash>SHOW LAST CRASH</button>
+</div>
+<div id=box class=pane></div>
+<div id=prog class=pane></div>
+<div id=stat>Idle</div>
 <iframe id=ifr sandbox="allow-scripts allow-same-origin"></iframe>
 <script>
-var VER='v23';
+var VER='v24';
 var Q=new URLSearchParams(location.search);
 var MODE=+(Q.get('mode')||0);
 var MS=+(Q.get('ms')||6000);
 var NL=+(Q.get('n')||10);
-var SHOW=Q.has('show')||Q.has('noexec');
 var BIG=Q.has('big'),SMALL=Q.has('small');
 var START=Q.has('seed')?+Q.get('seed'):0;
-var ifr=document.getElementById('ifr'),log=document.getElementById('log'),box=document.getElementById('box');
-var seed=START,runOpen=false,timer=0;
+var ifr=document.getElementById('ifr'),log=document.getElementById('log'),box=document.getElementById('box'),prog=document.getElementById('prog'),stat=document.getElementById('stat');
+var seed=START,running=false,runOpen=false,timer=0,lastCrash='';
 var K=["png","gif","jpg","webp","ttf","woff","wav","mp3","svg","wasm"];
 
 function mk(s){return function(){s|=0;s=s+0x6D2B79F5|0;var t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 function ri(R,n){var x=Math.floor(R()*n)%n;return x<0?0:x}
 function sz(){return SMALL?1024:BIG?(1<<24):(1<<14)}
-function hb(s){try{localStorage.setItem('jscfuzz-hb',s)}catch(e){}}
 function hex(a){var s='';for(var i=0;i<a.length;i++)s+=(a[i]<16?'0':'')+a[i].toString(16);return s}
 function u32(a,o,v){a[o]=v>>>24&255;a[o+1]=v>>>16&255;a[o+2]=v>>>8&255;a[o+3]=v&255}
 function u16(a,o,v){a[o]=v>>>8&255;a[o+1]=v&255}
 function put(a,o,s){for(var i=0;i<s.length;i++)a[o+i]=s.charCodeAt(i)&255}
+function L(s){log.textContent+=(log.textContent?'\n':'')+s;log.scrollTop=log.scrollHeight}
+function S(s){stat.textContent=s}
 
 var PAT=[
 function(){return 'var a=new Uint8Array(SZ);a[0]=1;return structuredClone(a)'},
@@ -69,20 +81,17 @@ function mut(a,R){
   if(k===2&&a.length>16){var o=4+Math.floor(R()*8),v=[0,2147483647,4294967295,2147483648][Math.floor(R()*4)];if(o+3<a.length)u32(a,o,v)}
   return a;
 }
-
 function mkpng(R){var n=40+Math.floor(R()*60),a=new Uint8Array(n+64),i;
   put(a,0,"\x89PNG\r\n\x1a\n");put(a,8,"IHDR");u32(a,12,13);
   u32(a,16,R()<0.3?2147483647:Math.floor(R()*4096)+1);u32(a,20,R()<0.3?2147483647:Math.floor(R()*4096)+1);
   a[24]=8;a[25]=6;a[26]=0;a[27]=0;a[28]=0;u32(a,29,Math.floor(R()*4294967295));
   put(a,33,"IDAT");u32(a,37,n);for(i=41;i<41+n;i++)a[i]=Math.floor(R()*256);
   put(a,41+n,"IEND");return a.subarray(0,45+n)}
-
 function mkgif(R){var n=20+Math.floor(R()*40),a=new Uint8Array(n+96),i;
   put(a,0,"GIF89a");u16(a,6,1+Math.floor(R()*300));u16(a,8,1+Math.floor(R()*300));
   a[10]=243;a[11]=0;a[12]=0;for(i=13;i<61;i++)a[i]=Math.floor(R()*256);
   a[61]=44;u16(a,62,0);u16(a,64,0);u16(a,66,32767);u16(a,68,32767);a[70]=0;a[71]=2+Math.floor(R()*9);
   for(i=72;i<72+n;i++)a[i]=Math.floor(R()*256);a[72+n]=59;return a.subarray(0,73+n)}
-
 function mkjpg(R){var n=20+Math.floor(R()*60),a=new Uint8Array(n+80),i;
   a[0]=255;a[1]=216;a[2]=255;a[3]=224;u16(a,4,16);put(a,6,"JFIF");
   a[11]=1;a[12]=1;a[13]=0;u16(a,14,1);u16(a,16,1);a[18]=0;a[19]=0;
@@ -90,35 +99,28 @@ function mkjpg(R){var n=20+Math.floor(R()*60),a=new Uint8Array(n+80),i;
   a[29]=3;a[30]=1;a[31]=17;a[32]=0;a[33]=2;a[34]=17;a[35]=1;a[36]=3;a[37]=17;a[38]=1;
   a[39]=255;a[40]=218;u16(a,41,8);a[43]=3;for(i=44;i<44+n;i++)a[i]=Math.floor(R()*256);
   a[44+n]=255;a[45+n]=217;return a.subarray(0,46+n)}
-
 function mkwebp(R){var n=20+Math.floor(R()*50),a=new Uint8Array(n+32),i;
   put(a,0,"RIFF");u32(a,4,n+12);put(a,8,"WEBP");put(a,12,"VP8 ");u32(a,16,n);
   for(i=20;i<20+n;i++)a[i]=Math.floor(R()*256);return a.subarray(0,20+n)}
-
 function mkfnt(R,w){var n=16+Math.floor(R()*40),a=new Uint8Array(n+160),o,i;
   if(w){put(a,0,"wOFF");u32(a,4,65536);u32(a,8,n+40);u16(a,12,1+Math.floor(R()*64));o=14}
   else{a[0]=0;a[1]=1;a[2]=0;a[3]=0;u16(a,4,1+Math.floor(R()*64));o=6}
   for(i=o;i<a.length;i++)a[i]=Math.floor(R()*256);return a}
-
 function mkwav(R){var n=20+Math.floor(R()*80),a=new Uint8Array(n+48),i;
   put(a,0,"RIFF");u32(a,4,n+36);put(a,8,"WAVE");put(a,12,"fmt ");u32(a,16,16);
   u16(a,20,1);u16(a,22,1+Math.floor(R()*4));u32(a,24,8000+Math.floor(R()*88000));
   u32(a,28,8000);u16(a,32,1);u16(a,34,8);put(a,36,"data");u32(a,40,n);
   for(i=44;i<44+n;i++)a[i]=Math.floor(R()*256);return a.subarray(0,44+n)}
-
 function mkmp3(R){var n=20+Math.floor(R()*80),a=new Uint8Array(n+24),i;
   put(a,0,"ID3");a[3]=3;a[4]=0;a[5]=0;
   a[6]=Math.floor(R()*128);a[7]=Math.floor(R()*128);a[8]=Math.floor(R()*128);a[9]=Math.floor(R()*128);
   for(i=10;i<10+n;i++)a[i]=Math.floor(R()*256);return a.subarray(0,10+n)}
-
 function mkwasm(R){var n=8+Math.floor(R()*40),a=new Uint8Array(n+24),i;
   a[0]=0;a[1]=97;a[2]=115;a[3]=109;a[4]=1;a[5]=0;a[6]=0;a[7]=0;
   a[8]=1+Math.floor(R()*12);a[9]=n;for(i=10;i<10+n;i++)a[i]=Math.floor(R()*256);
   return a.subarray(0,10+n)}
-
 function mksvg(R){var q='<svg xmlns="http://www.w3.org/2000/svg" width="'+(1+Math.floor(R()*99))+'"><path d="M'+Math.floor(R()*99)+' '+Math.floor(R()*99)+'"/></svg>';
   if(R()<0.4)q=q.slice(0,4+Math.floor(R()*(q.length-4)));return new TextEncoder().encode(q)}
-
 function by(t,R){
   var a=t==="png"?mkpng(R):t==="gif"?mkgif(R):t==="jpg"?mkjpg(R):t==="webp"?mkwebp(R):
         t==="ttf"?mkfnt(R,0):t==="woff"?mkfnt(R,1):t==="wav"?mkwav(R):t==="mp3"?mkmp3(R):
@@ -127,10 +129,10 @@ function by(t,R){
 }
 
 function rs5(sd){
-  var R=mk(sd),L=[],s='var AC=null;try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}var t,b;';
+  var R=mk(sd),L2=[],s='var AC=null;try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}var t,b;';
   for(var i=0;i<30;i++){
     var t=K[ri(R,K.length)],h=hex(by(t,R));
-    L.push(t+' '+h);
+    L2.push(t+' '+h);
     s+='t="'+t+'";b=hx("'+h+'");';
     s+='if(t==="png"||t==="gif"||t==="jpg"||t==="webp")await A(t,createImageBitmap(new Blob([b])));';
     s+='if(t==="ttf"||t==="woff")await A(t,new FontFace("f"+i,b).load());';
@@ -138,10 +140,10 @@ function rs5(sd){
     s+='if(t==="svg")await A(t,P(new TextDecoder().decode(b)));';
     s+='if(t==="wasm")await A(t,WebAssembly.compile(b));';
   }
-  return {code:s,list:L};
+  return {code:s,list:L2};
 }
 
-function PRE(prog,sd){
+function PRE(p,sd){
  return '<!doctype html><meta charset=utf-8><script>'+
  'var SEED='+sd+';var R=mk(SEED);var TR=[];'+
  'function mk(s){return function(){s|=0;s=s+0x6D2B79F5|0;var t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}'+
@@ -151,46 +153,58 @@ function PRE(prog,sd){
  'function T(p,ms){return Promise.race([p,new Promise(function(_,j){setTimeout(function(){j("TO")},ms)})])}'+
  'async function A(t,p){try{await T(p,400);TR.push(t+":ok")}catch(e){TR.push(t+":x:"+(e&&e.name||e||"E"))}}'+
  'function P(x){try{(new DOMParser()).parseFromString(x,"image/svg+xml")}catch(e){}return Promise.resolve(1)}'+
- 'var COLD=async function(){TR=[];R=mk(SEED);try{await (async function(){'+prog+'})()}catch(e){TR.push("top:"+(e&&e.name))}return TR.join(";")};'+
+ 'var COLD=async function(){TR=[];R=mk(SEED);try{await (async function(){'+p+'})()}catch(e){TR.push("top:"+(e&&e.name))}return TR.join(";")};'+
  '(async function(){var c=await COLD();var h=await COLD();parent.postMessage({k:"r",cold:c,hot:h},"*")})()'+
  '<\/script>';
 }
 
-function runInIframe(prog,sd,ms){
+function runInIframe(p,sd,ms){
  return new Promise(function(res){
   var done=false;
   function fin(o){if(done)return;done=true;clearTimeout(timer);window.removeEventListener('message',onmsg);res(o)}
   function onmsg(e){if(!e.data||e.data.k!=='r')return;fin(e.data)}
   window.addEventListener('message',onmsg);
   timer=setTimeout(function(){fin({k:'r',cold:'HANG',hot:'HANG'})},ms);
-  ifr.srcdoc=PRE(prog,sd);
+  ifr.srcdoc=PRE(p,sd);
  });
 }
 
-async function step(){
+async function doSeed(){
  if(runOpen)return;
  runOpen=true;
- var prog,disp;
- if(MODE===5){var o5=rs5(seed);prog=o5.code;disp=o5.list.map(function(x){return x.length>110?x.slice(0,110)+'...':x}).join('\n')}
- else{prog=rs(seed);disp=prog}
- box.textContent=disp;
- try{localStorage.setItem('jscfuzz-prog',prog);localStorage.setItem('jscfuzz-seed',String(seed))}catch(e){}
- hb('last: seed:'+seed+':running');
- var o=await runInIframe(prog,seed,MS);
+ var p,d;
+ if(MODE===5){var o5=rs5(seed);p=o5.code;d=o5.list.map(function(x){return x.length>110?x.slice(0,110)+'...':x}).join('\n')}
+ else{p=rs(seed);d='mode '+MODE+' seed '+seed}
+ box.textContent=p;prog.textContent=d;
+ try{localStorage.setItem('jscfuzz-prog',p);localStorage.setItem('jscfuzz-seed',String(seed))}catch(e){}
+ S('Running seed '+seed+'...');
+ L('-- seed '+seed);
+ var o=await runInIframe(p,seed,MS);
  runOpen=false;
  var st;
- if(o.cold==='HANG')st='HANG/CRASH killed at '+MS+'ms';
+ if(o.cold==='HANG'){st='HANG/CRASH killed at '+MS+'ms';lastCrash=p}
  else if(o.cold===o.hot)st='same: '+o.cold;
- else{st='DIVERGE cold='+o.cold+' hot='+o.hot;try{localStorage.setItem('jscfuzz-div',prog)}catch(e){}}
- log.textContent=VER+' mode='+MODE+' ms='+MS+'\n'+st+'\n'+log.textContent;
- if(SHOW)return;
- seed++;step();
+ else{st='DIVERGE cold='+o.cold+' hot='+o.hot;lastCrash=p;try{localStorage.setItem('jscfuzz-div',p)}catch(e){}}
+ L(st);
+ seed++;
 }
+
+async function loop(){
+ running=true;S('Running...');
+ while(running){await doSeed()}
+ S('Stopped at seed '+seed+'.');
+}
+
+document.getElementById('bFuzz').onclick=function(){if(!running)loop()};
+document.getElementById('bStop').onclick=function(){running=false;S('Stopping...')};
+document.getElementById('bRun').onclick=async function(){running=false;await doSeed();S('Ran seed '+(seed-1)+'.')};
+document.getElementById('bCopy').onclick=function(){try{navigator.clipboard.writeText(box.textContent);S('Copied.')}catch(e){S('Copy failed.')}};
+document.getElementById('bClr').onclick=function(){log.textContent='';S('Log cleared.')};
+document.getElementById('bCrash').onclick=function(){if(lastCrash){box.textContent=lastCrash;S('Last crash program shown.')}else S('No crash recorded yet.')};
 
 try{
  var ps=localStorage.getItem('jscfuzz-seed');
- if(ps!==null&&!Q.has('seed')){log.textContent='PREVIOUS RUN STOPPED ON SEED '+ps+'\n'}
+ if(ps!==null){L('PREVIOUS RUN STOPPED ON SEED '+ps);S('Idle. Press FUZZ.')}
 }catch(e){}
-step();
 </script>
 </body></html>
