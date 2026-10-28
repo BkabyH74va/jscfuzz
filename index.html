@@ -25,7 +25,7 @@ button:active{background:#333}
 </div>
 <div id=src>--</div>
 <textarea id=ta placeholder="paste JS here, or leave empty to run generated seed"></textarea>
-<div id=status>Idle</div>
+<div id=status>Stopped at seed 0.</div>
 <iframe id=ifr sandbox="allow-scripts allow-same-origin"></iframe>
 <script>
 var VER='v30.1';
@@ -242,5 +242,5 @@ try{
 }catch(e){}
 if(!ta.value.trim())ta.value='structuredClone([new Uint8Array(64)])';
 
-if(!running)status.textContent='Idle — seed='+seed+' mode='+MODE+' ms='+MS;
+if(!running)status.textContent='Stopped at seed '+seed+'. mode='+MODE+' ms='+MS;
 </script>
