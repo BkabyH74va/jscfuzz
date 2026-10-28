@@ -1,6 +1,6 @@
 <!doctype html>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>jscfuzz v11</title>
+<title>jscfuzz v12</title>
 <style>
 *{box-sizing:border-box}
 body{background:#0b0b0b;color:#ccc;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:8px}
@@ -20,8 +20,8 @@ textarea{width:100%;height:110px;background:#000;color:#ffd84d;border:1px solid 
 <script>
 (function(){
 var P=new URLSearchParams(location.search);
-var VER='jscfuzz v11';
-var SMALL=P.has('small'),BIG=P.has('big'),SWEEP=P.has('sweep'),SWEEP2=P.has('sweep2');
+var VER='jscfuzz v12';
+var SMALL=P.has('small'),BIG=P.has('big'),SWEEP=P.has('sweep'),SWEEP2=P.has('sweep2'),PROBE=P.has('probe');
 var SHOW=P.has('show')||P.has('noexec');
 var SEED0=(P.get('seed')!==null&&P.get('seed')!=='')?parseInt(P.get('seed'),10):null;
 var HANGMS=parseInt(P.get('ms')||'1500',10);
@@ -97,6 +97,35 @@ function gen(seed){
   return o.join('\n');
 }
 
+var PR=[
+ 'var b=new ArrayBuffer(64);var v=new Uint8Array(b);b.transfer();v[0]=1;v.length;',
+ 'var b=new ArrayBuffer(64);var v=new Uint8Array(b);b.transfer();structuredClone(v);',
+ 'var b=new ArrayBuffer(1024);var v=new Uint8Array(b);structuredClone(v,{transfer:[b]});v[0];',
+ 'var b=new ArrayBuffer(16,{maxByteLength:4096});var v=new Uint8Array(b,0,8);b.resize(4);v[0];b.resize(4096);v[8];',
+ 'var b=new ArrayBuffer(8,{maxByteLength:64});var v=new Uint8Array(b);structuredClone(v,{transfer:[b]});',
+ 'var b=new ArrayBuffer(16);var d=new DataView(b);b.transfer();d.getUint8(0);',
+ 'var b=new ArrayBuffer(16);var d=new DataView(b,4,8);b.transfer();d.byteLength;structuredClone(d);',
+ 'var s="a";for(var i=0;i<24;i++)s=s+s;s.length;',
+ 'var s="a".repeat(1<<20);var t=s;for(var i=0;i<40;i++)t=t.slice(0,t.length-1);t.length;',
+ 'var a=[];for(var i=0;i<300;i++)a.push((i*7919)%300);a.sort(function(x,y){a.push(x);return x-y});a.length;',
+ 'var a=[5,3,1,4,2];for(var i=0;i<50;i++)a.sort(function(){if(a.length>5)throw new Error("x");return 0});',
+ 'var p=new Proxy({},{get:function(t,k){return p[k]}});p.x;',
+ 'var p=new Proxy({a:1},{ownKeys:function(){return["a"]},getOwnPropertyDescriptor:function(){return{value:1,enumerable:true,configurable:true}},get:function(t,k){return t[k]}});JSON.stringify(p);',
+ 'var o={};for(var i=0;i<100000;i++)o={a:o};JSON.stringify(o).length;',
+ 'var a=[];for(var i=0;i<200000;i++)a=[a];a.flat(Infinity).length;',
+ '/(a+)+$/.test("a".repeat(28)+"b");',
+ '"a".repeat(1<<22).replace(/a/g,"b").length;',
+ '(2n**1000000n).toString().length;',
+ 'var x=2n**500000n;for(var i=0;i<50;i++)x=x/3n;x.toString().length;',
+ 'var a=new Array(1<<20);a[0]=1;a.length;structuredClone(a);',
+ 'var a=new Array(1<<20).fill(1);[...a].length;',
+ 'var m=new Map();for(var i=0;i<200000;i++)m.set(i,i);m.size;',
+ 'var r=[];for(var i=0;i<10000;i++)r.push(new WeakRef({i:i}));r.length;',
+ 'var a=[1,2,3];a.with(1,9);a.toSorted();a.toReversed();a.at(-1);',
+ 'var a=[{toString:function(){a.push(1);return"x"}}];a.join();',
+ 'function f(n){try{return n?f(n-1):0}finally{}}f(1e6);'
+];
+
 var SW_WR=['plain','array','object','map','set'],SW_TY=['Uint8Array','Float64Array','DataView'],SW_SZ=['2**16','2**20','2**24','2**26','2**28'];
 var COMBOS=[];
 (function(){for(var w=0;w<SW_WR.length;w++)for(var t=0;t<SW_TY.length;t++)for(var s=0;s<SW_SZ.length;s++)COMBOS.push([SW_WR[w],SW_TY[t],SW_SZ[s]]);})();
@@ -123,7 +152,7 @@ function c2Code(c){
 
 var WSRC="onmessage=function(e){var d=e.data,f;try{f=new Function(d.src);}catch(err){postMessage({t:'syntax',m:String(err.message)});return;}var c;try{c='ok:'+f();}catch(err){c='threw:'+((err&&err.name)||'?');}var h='-';if(d.n>0){try{for(var i=0;i<d.n;i++){var x='ok:'+f();if(x!==c){h=x;break;}}if(h==='-')h=c;}catch(err){h='threw:'+((err&&err.name)||'?');}}postMessage({t:'done',c:c,h:h});};";
 
-var W=null,wd=0,mode='idle',nxt=0,curSeed=null,swi=0,sw2i=0,stopFlag=false;
+var W=null,wd=0,mode='idle',nxt=0,curSeed=null,swi=0,sw2i=0,pbi=0,stopFlag=false;
 function mk(){var w=new Worker(URL.createObjectURL(new Blob([WSRC],{type:'text/javascript'})));w.onmessage=onmsg;return w;}
 function reset(){clearTimeout(wd);if(W)W.terminate();W=mk();}
 function finish(){if(mode==='fuzz'){setTimeout(step,0);}else{mode='idle';log('done.','dim');}}
@@ -135,6 +164,7 @@ function onmsg(e){
   else{log('  DIVERGENCE','bad');log('   cold: '+cut(d.c),'bad');log('   hot : '+cut(d.h),'bad');}
   if(mode==='sweep'){hb('sw:'+(swi-1)+':done');setTimeout(swStep,40);return;}
   if(mode==='sweep2'){hb('sw2:'+(sw2i-1)+':done');setTimeout(swStep2,40);return;}
+  if(mode==='probe'){hb('pb:'+(pbi-1)+':done');setTimeout(pbStep,40);return;}
   if(mode==='fuzz'&&curSeed!==null)hb('seed:'+curSeed+':done');
   finish();
 }
@@ -163,6 +193,14 @@ function swStep2(){
   W.postMessage({t:'run',src:'"use strict";\n'+code,n:1});
   wd=setTimeout(function(){log('  hang','warn');reset();hb('sw2:'+i+':done');setTimeout(swStep2,40);},6000);
 }
+function pbStep(){
+  if(pbi>=PR.length){log('probe complete.','ok');mode='idle';return;}
+  var i=pbi++,code=PR[i];
+  showSrc(code);hb('pb:'+i+':running');reset();
+  log('#'+i+'/'+PR.length+'  '+cut(code));
+  W.postMessage({t:'run',src:'"use strict";\n'+code,n:1});
+  wd=setTimeout(function(){log('  hang','warn');reset();hb('pb:'+i+':done');setTimeout(pbStep,40);},6000);
+}
 
 document.getElementById('fz').onclick=function(){if(mode==='fuzz')return;mode='fuzz';stopFlag=false;log('FUZZ from seed '+nxt);step();};
 document.getElementById('st').onclick=function(){stopFlag=true;};
@@ -180,11 +218,16 @@ document.getElementById('run').onclick=function(){
 ta.value=localStorage.getItem(LTA)||'structuredClone([new Uint8Array(2**28)])';
 ta.oninput=function(){try{localStorage.setItem(LTA,ta.value);}catch(e){}};
 
-log(VER+'   ms='+HANGMS+'  n='+HOTN+(SMALL?'  [small]':'')+(BIG?'  [big]':'')+(SWEEP?'  [sweep]':'')+(SWEEP2?'  [sweep2]':'')+(SHOW?'  [show]':''));
+log(VER+'   ms='+HANGMS+'  n='+HOTN+(SMALL?'  [small]':'')+(BIG?'  [big]':'')+(SWEEP?'  [sweep]':'')+(SWEEP2?'  [sweep2]':'')+(PROBE?'  [probe]':'')+(SHOW?'  [show]':''));
 try{ if(localStorage.getItem(LRUN)==='pending'){log('PREVIOUS RUN CRASHED THE TAB','bad');localStorage.setItem(LRUN,'ok');} }catch(e){}
 var last=localStorage.getItem(LSRC);if(last)srcEl.textContent=last;
 
-if(SWEEP2){
+if(PROBE){
+  var p0=0,pb=localStorage.getItem(HB),mp=pb&&/^pb:(\d+):(\w+)/.exec(pb);
+  if(mp){p0=parseInt(mp[1],10)+1;if(mp[2]==='running')log('PREVIOUS PROBE DIED: #'+(p0-1),'bad');}
+  pbi=p0;mode='probe';log('probe from #'+p0+' of '+PR.length);
+  W=mk();setTimeout(pbStep,400);
+}else if(SWEEP2){
   var a0=0,s2=localStorage.getItem(HB),n2=s2&&/^sw2:(\d+):(\w+)/.exec(s2);
   if(n2){a0=parseInt(n2[1],10)+1;if(n2[2]==='running')log('PREVIOUS STEP DIED: #'+(a0-1),'bad');}
   sw2i=a0;mode='sweep2';log('sweep2 from #'+a0+' of '+C2.length);
@@ -203,6 +246,6 @@ else{
   if(hb0){var mm=/^seed:(\d+):(\w+)/.exec(hb0);if(mm){from=parseInt(mm[1],10)+1;if(mm[2]==='running')log('PREVIOUS RUN DIED ON SEED '+(from-1),'bad');}}
   nxt=from;log('tap FUZZ, or paste a snippet and tap RUN');
 }
-if(!SWEEP&&!SWEEP2)W=mk();
+if(!SWEEP&&!SWEEP2&&!PROBE)W=mk();
 })();
 </script>
