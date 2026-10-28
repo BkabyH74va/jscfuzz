@@ -1,6 +1,6 @@
 <!doctype html>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>jscfuzz v10</title>
+<title>jscfuzz v11</title>
 <style>
 *{box-sizing:border-box}
 body{background:#0b0b0b;color:#ccc;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:8px}
@@ -20,7 +20,7 @@ textarea{width:100%;height:110px;background:#000;color:#ffd84d;border:1px solid 
 <script>
 (function(){
 var P=new URLSearchParams(location.search);
-var VER='jscfuzz v10';
+var VER='jscfuzz v11';
 var SMALL=P.has('small'),BIG=P.has('big'),SWEEP=P.has('sweep'),SWEEP2=P.has('sweep2');
 var SHOW=P.has('show')||P.has('noexec');
 var SEED0=(P.get('seed')!==null&&P.get('seed')!=='')?parseInt(P.get('seed'),10):null;
@@ -43,7 +43,7 @@ function gen(seed){
   var R=mulberry32(seed>>>0);
   function ri(n){return Math.floor(R()*n)%n;}
   function pk(a){return a[ri(a.length)];}
-  var o=['var E=[],W=function(f){try{return f()}catch(e){if(E.length<200)E.push(e.name)}};'],vals=[],i,n=6+ri(7),e;
+  var o=['var E=[],W=function(f,d){try{return f()}catch(e){if(E.length<200)E.push(e.name);return d}};'],vals=[],i,n=6+ri(7),e;
   for(i=0;i<n;i++){
     switch(ri(10)){
       case 0: e='('+pk(STRS)+')';break;
@@ -57,12 +57,12 @@ function gen(seed){
       case 8: e='new DataView(new ArrayBuffer(8))';break;
       default: e='new Set(['+ri(9)+'])';
     }
-    o.push('let v'+i+'=W(function(){return '+e+'});');vals.push('v'+i);
+    o.push('let v'+i+'=W(function(){return '+e+'},0);');vals.push('v'+i);
   }
-  var m=4+ri(7),A,B,T,e2;
+  var m=5+ri(8),A,B,T,e2;
   for(i=0;i<m;i++){
     A=pk(vals);B=pk(vals);T='v'+(n+i);
-    switch(ri(21)){
+    switch(ri(25)){
       case 0: e2='structuredClone('+A+')';break;
       case 1: e2='JSON.parse(JSON.stringify('+A+'))';break;
       case 2: e2='('+A+'.set('+B+',0),'+A+')';break;
@@ -83,12 +83,16 @@ function gen(seed){
       case 17: e2='structuredClone('+A+'.buffer)';break;
       case 18: e2='new Uint8Array('+A+'.buffer,0,8)';break;
       case 19: e2='structuredClone(['+A+','+A+'])';break;
+      case 20: e2='Object.assign({},'+A+')';break;
+      case 21: e2='new Map([["k",'+A+']])';break;
+      case 22: e2='new Set(['+A+'])';break;
+      case 23: e2='('+A+'.add('+B+'),'+A+')';break;
       default: e2=A+'.subarray(0,'+(1+ri(8))+')';
     }
-    o.push('let '+T+'=W(function(){return '+e2+'});');vals.push(T);
+    o.push('let '+T+'=W(function(){return '+e2+'},'+A+');');vals.push(T);
   }
   var k=3+ri(3);
-  for(i=0;i<k;i++)o.push('W(function(){return structuredClone('+pk(vals)+')});');
+  for(i=0;i<k;i++)o.push('W(function(){return structuredClone('+pk(vals)+')},0);');
   o.push('return E.join(";")+"|"+typeof '+pk(vals)+';');
   return o.join('\n');
 }
