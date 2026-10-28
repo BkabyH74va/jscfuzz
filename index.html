@@ -3,7 +3,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>jscfuzz v32</title>
+<title>jscfuzz v33</title>
 <style>
 body{background:#000;color:#aaa;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:8px}
 #out{white-space:pre-wrap;word-break:break-all;max-height:50vh;overflow:auto;color:#aaa}
@@ -31,14 +31,14 @@ button:active{background:#333}
 <div id=status>Stopped at seed 0.</div>
 <iframe id=ifr sandbox="allow-scripts allow-same-origin"></iframe>
 <script>
-var VER='v32';
+var VER='v33';
 var Q=new URLSearchParams(location.search);
 var MODE=+(Q.get('mode')||0);
 var MS=+(Q.get('ms')||2500);
 var NL=+(Q.get('n')||10);
 var BIG=Q.has('big'),SMALL=Q.has('small');
 var START=Q.has('seed')?+Q.get('seed'):0;
-var PL=32,CW=8,MAXC=80;
+var PL=32,CW=8,MAXC=120,CAPT=6;
 
 var ifr=document.getElementById('ifr');
 var out=document.getElementById('out');
@@ -61,6 +61,7 @@ function u32(a,o,v){a[o]=v>>>24&255;a[o+1]=v>>>16&255;a[o+2]=v>>>8&255;a[o+3]=v&
 function u16(a,o,v){a[o]=v>>>8&255;a[o+1]=v&255}
 function put(a,o,s){for(var i=0;i<s.length;i++)a[o+i]=s.charCodeAt(i)&255}
 function hb(){try{localStorage.setItem('HB',String(Date.now()))}catch(e){}}
+function hxPage(h){var a=new Uint8Array(h.length>>1);for(var i=0;i<a.length;i++)a[i]=parseInt(h.substr(i*2,2),16);return a}
 
 function saveCorp(){try{localStorage.setItem('CORP',JSON.stringify(CORP))}catch(e){}}
 function loadCorp(){try{var c=localStorage.getItem('CORP');if(c)CORP=JSON.parse(c)||[]}catch(e){CORP=[]}}
@@ -75,7 +76,12 @@ function score(n){
 }
 function addCorp(t,h,s){
   if(s<3)return;
-  for(var i=0;i<CORP.length;i++)if(CORP[i].h===h)return;
+  var i,c=0,wi=-1,ws=99;
+  for(i=0;i<CORP.length;i++){if(CORP[i].h===h)return;if(CORP[i].t===t)c++}
+  if(c>=CAPT){
+    for(i=0;i<CORP.length;i++)if(CORP[i].t===t&&CORP[i].s<ws){ws=CORP[i].s;wi=i}
+    if(wi>=0&&ws<=s)CORP.splice(wi,1);else return;
+  }
   CORP.push({t:t,h:h,s:s});
   CORP.sort(function(a,b){return b.s-a.s});
   if(CORP.length>MAXC)CORP.length=MAXC;
@@ -85,8 +91,8 @@ function pickCorp(R,t){
   var pool=[];
   for(var i=0;i<CORP.length;i++)if(CORP[i].t===t)pool.push(CORP[i]);
   if(!pool.length)return null;
-  var top=pool.slice(0,Math.max(3,Math.ceil(pool.length/2)));
-  return top[ri(R,top.length)];
+  pool.sort(function(a,b){return b.s-a.s});
+  return pool[ri(R,pool.length)];
 }
 
 var PAT=[
@@ -142,13 +148,16 @@ function mkgif(R){var n=20+Math.floor(R()*40),a=new Uint8Array(n+96),i;
   a[10]=243;a[11]=0;a[12]=0;for(i=13;i<61;i++)a[i]=Math.floor(R()*256);
   a[61]=44;u16(a,62,0);u16(a,64,0);u16(a,66,32767);u16(a,68,32767);a[70]=0;a[71]=2+Math.floor(R()*9);
   for(i=72;i<72+n;i++)a[i]=Math.floor(R()*256);a[72+n]=59;return a.subarray(0,73+n)}
-function mkjpg(R){var n=20+Math.floor(R()*60),a=new Uint8Array(n+80),i;
+function mkjpg(R){var n=20+Math.floor(R()*60),a=new Uint8Array(n+96),i;
   a[0]=255;a[1]=216;a[2]=255;a[3]=224;u16(a,4,16);put(a,6,"JFIF");
   a[11]=1;a[12]=1;a[13]=0;u16(a,14,1);u16(a,16,1);a[18]=0;a[19]=0;
-  a[20]=255;a[21]=192;u16(a,22,11);a[24]=8;u16(a,25,1+Math.floor(R()*3000));u16(a,27,1+Math.floor(R()*3000));
+  a[20]=255;a[21]=192;u16(a,22,17);a[24]=8;
+  u16(a,25,1+Math.floor(R()*3000));u16(a,27,1+Math.floor(R()*3000));
   a[29]=3;a[30]=1;a[31]=17;a[32]=0;a[33]=2;a[34]=17;a[35]=1;a[36]=3;a[37]=17;a[38]=1;
-  a[39]=255;a[40]=218;u16(a,41,8);a[43]=3;for(i=44;i<44+n;i++)a[i]=Math.floor(R()*256);
-  a[44+n]=255;a[45+n]=217;return a.subarray(0,46+n)}
+  a[39]=255;a[40]=218;u16(a,41,12);a[43]=3;
+  a[44]=1;a[45]=0;a[46]=2;a[47]=17;a[48]=3;a[49]=17;
+  for(i=50;i<50+n;i++)a[i]=Math.floor(R()*256);
+  a[50+n]=255;a[51+n]=217;return a.subarray(0,52+n)}
 function mkwebp(R){var n=20+Math.floor(R()*50),a=new Uint8Array(n+32),i;
   put(a,0,"RIFF");u32(a,4,n+12);put(a,8,"WEBP");put(a,12,"VP8 ");u32(a,16,n);
   for(i=20;i<20+n;i++)a[i]=Math.floor(R()*256);return a.subarray(0,20+n)}
@@ -196,24 +205,20 @@ function rs5(sd){
   else if(t==="wav"||t==="mp3")ex='new AudioContext().decodeAudioData(new Uint8Array(64).buffer)';
   else if(t==="wasm")ex='WebAssembly.compile(new Uint8Array(64))';
   else ex='createImageBitmap(new Blob([new Uint8Array(64)]))';
-  for(var i=0;i<PL;i++){
-    var src0=(CORP.length&&R()<0.75)?pickCorp(R,t):null;
-    var b;
-    if(src0){b=mut(hxPage(src0.h),R)}
-    else{b=mut(new Uint8Array(base),R)}
-    var h=hex(b);hs.push(h);
+  var i=0;
+  while(i<PL){
     s+='q=[];\n';
     for(var j=0;j<CW&&i<PL;j++,i++){
-      if(j>0){var s2=(CORP.length&&R()<0.75)?pickCorp(R,t):null;
-        var b2=s2?mut(hxPage(s2.h),R):mut(new Uint8Array(base),R);
-        h=hex(b2);hs.push(h);}
+      var b;
+      var c=(CORP.length&&R()<0.5)?pickCorp(R,t):null;
+      b=c?mut(hxPage(c.h),R):mut(new Uint8Array(base),R);
+      var h=hex(b);hs.push(h);
       s+='q.push(A("'+t+'",'+i+','+callFor(t,i,h)+'));\n';
     }
     s+='await Promise.all(q);\n';
   }
   return {code:s,expr:ex,hs:hs};
 }
-function hxPage(h){var a=new Uint8Array(h.length>>1);for(var i=0;i<a.length;i++)a[i]=parseInt(h.substr(i*2,2),16);return a}
 
 function PRE(p,sd){
  return '<!doctype html><meta charset=utf-8><script>'+
@@ -253,9 +258,8 @@ function learn(trace,hs){
   for(var i=0;i<parts.length;i++){
     var m=parts[i].match(/^(\d+):(\w+):(.*)$/);
     if(!m)continue;
-    var idx=+m[1],h=hs[idx];
-    if(!h)continue;
-    addCorp(m[2],h,score(parts[i]));
+    var h=hs[+m[1]];
+    if(h)addCorp(m[2],h,score(parts[i]));
   }
 }
 
