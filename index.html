@@ -217,7 +217,7 @@ async function go(useManual){
  else{st='<span style="color:#f66">DIVERGE cold='+o.cold+' hot='+o.hot+'</span>';lastCrash=p;try{localStorage.setItem('jscfuzz-div',p)}catch(e){}}
  var line='<span style="color:#aaa">-- seed '+(useManual?'MANUAL':seed)+'</span>\n  '+st;
  if(o.cold==='HANG')line='<span style="color:#aaa">-- seed '+(useManual?'MANUAL':seed)+'</span>\n  <span style="color:#f66">HANG/CRASH killed at '+MS+'ms</span>';
- out.innerHTML=line+'\n'+out.innerHTML;
+ out.innerHTML=line+'\n'+out.innerHTML;out.scrollTop=0;
  if(!running){status.className='';status.textContent='Stopped at seed '+seed+'.';return;}
  seed++;
  status.textContent='Running seed '+seed+'...';
@@ -231,8 +231,8 @@ function copySrc(){navigator.clipboard.writeText(src.textContent).then(function(
 function clr(){out.innerHTML='';status.className='';status.textContent='Cleared.';}
 function showCrash(){try{var c=localStorage.getItem('LCRASH');if(c){var o=JSON.parse(c);src.textContent='-- LAST CRASH seed '+o.seed+'\n'+o.prog;status.className='';status.textContent='Loaded last crash.'}else{status.className='';status.textContent='No crash stored.'}}catch(e){status.className='';status.textContent='Error loading crash.'}}
 
-window.addEventListener('message',function(e){if(e.data&&e.data.k==='err'){out.innerHTML='<span style="color:#f66">IFRAME ERROR: '+e.data.msg+'</span>\n'+out.innerHTML;}});
-window.addEventListener('error',function(e){out.innerHTML='<span style="color:#f66">PAGE ERROR: '+e.message+'</span>\n'+out.innerHTML;});
+window.addEventListener('message',function(e){if(e.data&&e.data.k==='err'){out.innerHTML='<span style="color:#f66">IFRAME ERROR: '+e.data.msg+'</span>\n'+out.innerHTML;out.scrollTop=0;}});
+window.addEventListener('error',function(e){out.innerHTML='<span style="color:#f66">PAGE ERROR: '+e.message+'</span>\n'+out.innerHTML;out.scrollTop=0;});
 
 try{
  var ps=localStorage.getItem('LRUN');
