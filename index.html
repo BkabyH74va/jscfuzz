@@ -45,7 +45,7 @@ var ver=document.getElementById('ver');
 
 ver.textContent='jscfuzz '+VER+'  |  mode '+MODE;
 
-var seed=START,running=false,runOpen=false,timer=0,iframeTimer=0,lastCrash='';
+var seed=START,running=false,runOpen=false,timer=0,iframeTimer=0,lastCrash='',activeSeed=START;
 var K=["png","gif","jpg","webp","ttf","woff","wav","mp3","svg","wasm"];
 
 function mk(s){return function(){s|=0;s=s+0x6D2B79F5|0;var t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
@@ -201,31 +201,33 @@ function runInIframe(p,sd,ms){
 async function go(useManual){
  if(runOpen)return;
  runOpen=true;
+ activeSeed=useManual?'MANUAL':seed;
  var p;
  if(useManual&&ta.value.trim()){p=ta.value.trim();}
  else if(MODE===5){var o5=rs5(seed);p=o5.code;}
  else{p=rs(seed);}
- src.textContent='-- seed '+(useManual?'MANUAL':seed)+'\n'+p;
- try{localStorage.setItem('LSRC',p);localStorage.setItem('LRUN',String(seed))}catch(e){}
+ src.textContent='-- seed '+activeSeed+'\n'+p;
+ try{localStorage.setItem('LSRC',p);localStorage.setItem('LRUN',String(seed));localStorage.setItem('LASEED',String(activeSeed))}catch(e){}
  hb();
- status.className='run';status.textContent='Running seed '+(useManual?'MANUAL':seed)+'...';
+ status.className='run';status.textContent='Running seed '+activeSeed+'...';
  var o=await runInIframe(p,seed,MS);
  runOpen=false;
  var st;
- if(o.cold==='HANG'){st='HANG/CRASH killed at '+MS+'ms';lastCrash=p;try{localStorage.setItem('LCRASH',JSON.stringify({seed:useManual?'MANUAL':seed,prog:p}))}catch(e){}}
+ if(o.cold==='HANG'){st='HANG/CRASH killed at '+MS+'ms';lastCrash=p;try{localStorage.setItem('LCRASH',JSON.stringify({seed:activeSeed,prog:p}))}catch(e){}}
  else if(o.cold===o.hot)st='<span style="color:#9f9">same: '+o.cold+' (JIT x10)</span>';
  else{st='<span style="color:#f66">DIVERGE cold='+o.cold+' hot='+o.hot+'</span>';lastCrash=p;try{localStorage.setItem('jscfuzz-div',p)}catch(e){}}
- var line='<span style="color:#aaa">-- seed '+(useManual?'MANUAL':seed)+'</span>\n  '+st;
- if(o.cold==='HANG')line='<span style="color:#aaa">-- seed '+(useManual?'MANUAL':seed)+'</span>\n  <span style="color:#f66">HANG/CRASH killed at '+MS+'ms</span>';
+ var line='<span style="color:#aaa">-- seed '+activeSeed+'</span>\n  '+st;
+ if(o.cold==='HANG')line='<span style="color:#aaa">-- seed '+activeSeed+'</span>\n  <span style="color:#f66">HANG/CRASH killed at '+MS+'ms</span>';
  out.innerHTML+=line+'\n';out.scrollTop=out.scrollHeight;
- if(!running){status.className='';status.textContent='Stopped at seed '+seed+'.';return;}
+ if(!running){status.className='';status.textContent='Stopped at seed '+activeSeed+'.';try{localStorage.setItem('LASEED',String(activeSeed))}catch(e){}return;}
  seed++;
- status.className='run';status.textContent='Running seed '+seed+'...';
+ activeSeed=seed;
+ status.className='run';status.textContent='Running seed '+activeSeed+'...';
  if(running)setTimeout(function(){go(false)},0);
 }
 
-function fuzz(){running=true;status.className='run';status.textContent='Running seed '+seed+'...';go(false);}
-function stop(){running=false;status.className='';status.textContent='Stopped at seed '+seed+'.';}
+function fuzz(){running=true;status.className='run';status.textContent='Running seed '+activeSeed+'...';go(false);}
+function stop(){running=false;status.className='';status.textContent='Stopped at seed '+activeSeed+'.';}
 function runManual(){running=false;status.className='';status.textContent='Running manual...';go(true);}
 function copySrc(){navigator.clipboard.writeText(src.textContent).then(function(){status.className='';status.textContent='Copied.'})}
 function clr(){out.innerHTML='';status.className='';status.textContent='Cleared — seed='+seed;}
@@ -236,11 +238,13 @@ window.addEventListener('error',function(e){out.innerHTML+='<span style="color:#
 
 try{
  var ps=localStorage.getItem('LRUN');
+ var pa=localStorage.getItem('LASEED');
  var pp=localStorage.getItem('LSRC');
  if(pp!==null)src.textContent=pp;
- if(ps!==null&&!Q.has('seed')){out.innerHTML+='<span style="color:#ff6">PREVIOUS RUN STOPPED ON SEED '+ps+'</span>\n';out.scrollTop=out.scrollHeight;seed=+ps+1;}
+ if(ps!==null&&!Q.has('seed')){seed=+ps+1;}
+ if(pa!==null){activeSeed=pa;}
 }catch(e){}
 if(!ta.value.trim())ta.value='structuredClone([new Uint8Array(64)])';
 
-if(!running)status.textContent='Stopped at seed '+seed+'. mode='+MODE+' ms='+MS;
+if(!running)status.textContent='Stopped at seed '+activeSeed+'. mode='+MODE+' ms='+MS;
 </script>
