@@ -1,15 +1,31 @@
 <!doctype html>
-<html><head><meta charset=utf-8><title>jscfuzz v22</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>jscfuzz v22.1</title>
 <style>
-body{background:#111;color:#ddd;font:12px/1.4 ui-monospace,Menlo,monospace;margin:0;padding:8px}
-#log{white-space:pre-wrap;word-break:break-all}
-#box{white-space:pre-wrap;word-break:break-all;background:#08240a;color:#9f9;padding:6px;margin-top:8px;font-size:11px}
+body{background:#000;color:#0f0;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:8px}
+#out{white-space:pre-wrap;word-break:break-all;max-height:55vh;overflow:auto}
+button{background:#222;color:#ddd;border:1px solid #444;padding:8px 14px;margin:4px;font:inherit;cursor:pointer;border-radius:4px}
+button:active{background:#333}
+#src{background:#08240a;color:#9f9;padding:8px;margin:8px 0;border:1px solid #0a3;white-space:pre-wrap;word-break:break-all;max-height:30vh;overflow:auto;font-size:12px}
+#ta{width:100%;height:90px;background:#111;color:#0f0;border:1px solid #333;padding:6px;font:inherit;box-sizing:border-box;margin-top:6px}
+#status{color:#888;margin-top:6px}
 #ifr{position:absolute;left:-10px;width:1px;height:1px;border:0;opacity:.01}
-</style></head><body>
-<div id=log></div><div id=box></div>
+</style>
+<div id=out></div>
+<div>
+<button onclick=fuzz()>FUZZ</button>
+<button onclick=stop()>STOP</button>
+<button onclick=runManual()>RUN</button>
+<button onclick=copySrc()>COPY</button>
+<button onclick=clr()>CLR</button>
+<button onclick=showCrash()>SHOW LAST CRASH</button>
+</div>
+<div id=src>--</div>
+<textarea id=ta placeholder="paste JS here, or leave empty to run generated seed"></textarea>
+<div id=status></div>
 <iframe id=ifr sandbox="allow-scripts allow-same-origin"></iframe>
 <script>
-var VER='v22';
+var VER='v22.1';
 var Q=new URLSearchParams(location.search);
 var MODE=+(Q.get('mode')||0);
 var MS=+(Q.get('ms')||6000);
@@ -17,13 +33,19 @@ var NL=+(Q.get('n')||10);
 var SHOW=Q.has('show')||Q.has('noexec');
 var BIG=Q.has('big'),SMALL=Q.has('small');
 var START=Q.has('seed')?+Q.get('seed'):0;
-var ifr=document.getElementById('ifr'),log=document.getElementById('log'),box=document.getElementById('box');
-var seed=START,runOpen=false,timer=0;
+
+var ifr=document.getElementById('ifr');
+var out=document.getElementById('out');
+var src=document.getElementById('src');
+var ta=document.getElementById('ta');
+var status=document.getElementById('status');
+
+var seed=START,runOpen=false,timer=0,iframeTimer=0,running=false;
 
 function mk(s){return function(){s|=0;s=s+0x6D2B79F5|0;var t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 function ri(R,n){var x=Math.floor(R()*n)%n;return x<0?0:x}
 function sz(){return SMALL?1024:BIG?(1<<24):(1<<14)}
-function hb(s){try{localStorage.setItem('jscfuzz-hb',s)}catch(e){}}
+function hb(){try{var now=Date.now();localStorage.setItem('HB',String(now));localStorage.setItem('jscfuzz-hb',String(now))}catch(e){}}
 
 var PAT=[
 function(){return 'var a=new Uint8Array(SZ);a[0]=1;return structuredClone(a)'},
@@ -136,39 +158,62 @@ function PRE(prog,sd){
  '<\/script>';
 }
 
+function killIframe(){
+  try{ifr.contentWindow.location='about:blank'}catch(e){}
+  clearTimeout(iframeTimer);
+}
+
 function runInIframe(prog,sd,ms){
  return new Promise(function(res){
+  killIframe();
   var done=false;
-  function fin(o){if(done)return;done=true;clearTimeout(timer);window.removeEventListener('message',onmsg);res(o)}
+  function fin(o){if(done)return;done=true;clearTimeout(iframeTimer);window.removeEventListener('message',onmsg);res(o)}
   function onmsg(e){if(!e.data||e.data.k!=='r')return;fin(e.data)}
   window.addEventListener('message',onmsg);
-  timer=setTimeout(function(){fin({k:'r',cold:'HANG',hot:'HANG'})},ms);
+  iframeTimer=setTimeout(function(){fin({k:'r',cold:'HANG',hot:'HANG'})},ms);
   ifr.srcdoc=PRE(prog,sd);
  });
 }
 
-async function step(){
+async function go(useManual){
  if(runOpen)return;
  runOpen=true;
- var prog=MODE===5?rs5():rs(seed);
- box.textContent=prog;
- try{localStorage.setItem('jscfuzz-prog',prog);localStorage.setItem('jscfuzz-seed',String(seed))}catch(e){}
- hb('last: seed:'+seed+':running');
+ var prog=ta.value.trim();
+ if(!useManual||!prog){prog=MODE===5?rs5():rs(seed);}
+ src.textContent='-- seed '+(useManual?'MANUAL':seed)+'\n'+prog;
+ try{localStorage.setItem('LSRC',prog);localStorage.setItem('LTA',ta.value);localStorage.setItem('LRUN',String(seed))}catch(e){}
+ hb();
  var o=await runInIframe(prog,seed,MS);
  runOpen=false;
  var st;
- if(o.cold==='HANG')st='HANG/CRASH killed at '+MS+'ms';
+ if(o.cold==='HANG'){st='HANG/CRASH killed at '+MS+'ms';try{localStorage.setItem('LCRASH',JSON.stringify({seed:seed,prog:prog}))}catch(e){}}
  else if(o.cold===o.hot)st='same: '+o.cold;
  else{st='DIVERGE cold='+o.cold+' hot='+o.hot;try{localStorage.setItem('jscfuzz-div',prog)}catch(e){}}
- log.textContent=VER+' mode='+MODE+' ms='+MS+'\n'+st+'\n'+log.textContent;
- if(SHOW)return;
- seed++;step();
+ out.textContent='-- seed '+(useManual?'MANUAL':seed)+'\n  '+st+'\n'+out.textContent;
+ if(SHOW||useManual){status.textContent='Done.';return;}
+ seed++;
+ status.textContent='Running seed '+seed+'...';
+ if(running)go(false);
 }
 
+function fuzz(){running=true;status.textContent='Running seed '+seed+'...';go(false);}
+function stop(){running=false;status.textContent='Stopped.';}
+function runManual(){running=false;status.textContent='Running manual...';go(true);}
+function copySrc(){var t=src.textContent;navigator.clipboard.writeText(t).then(function(){status.textContent='Copied.'})}
+function clr(){out.textContent='';status.textContent='Cleared.';}
+function showCrash(){try{var c=localStorage.getItem('LCRASH');if(c){var o=JSON.parse(c);src.textContent='-- LAST CRASH seed '+o.seed+'\n'+o.prog;status.textContent='Loaded last crash.'}else{status.textContent='No crash stored.'}}catch(e){status.textContent='Error loading crash.'}}
+
+window.addEventListener('message',function(e){if(e.data&&e.data.k==='err'){out.textContent='IFRAME ERROR: '+e.data.msg+'\n'+out.textContent;}});
+window.addEventListener('error',function(e){out.textContent='PAGE ERROR: '+e.message+'\n'+out.textContent;});
+
 try{
- var ps=localStorage.getItem('jscfuzz-seed');
- if(ps!==null&&!Q.has('seed')){log.textContent='PREVIOUS RUN STOPPED ON SEED '+ps+'\n';box.textContent=localStorage.getItem('jscfuzz-prog')||''}
+ var ps=localStorage.getItem('LRUN');
+ var pt=localStorage.getItem('LTA');
+ var pp=localStorage.getItem('LSRC');
+ if(pt!==null)ta.value=pt;
+ if(pp!==null)src.textContent=pp;
+ if(ps!==null&&!Q.has('seed')){out.textContent='PREVIOUS RUN STOPPED ON SEED '+ps+'\n'+out.textContent;seed=+ps+1;}
 }catch(e){}
-step();
+
+if(!SHOW)status.textContent='Ready. mode='+MODE+' ms='+MS;
 </script>
-</body></html>
