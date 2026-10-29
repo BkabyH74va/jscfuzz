@@ -1,41 +1,40 @@
 <!doctype html>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<title>jscfuzz v38 - BUURZA CVE-AWARE</title>
+<title>jscfuzz v39 - LOGIC HUNTER (MTE BYPASS)</title>
 <style>
 body{background:#000;color:#aaa;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:8px}
 #out{white-space:pre-wrap;word-break:break-all;max-height:50vh;overflow:auto;color:#aaa}
 button{background:#222;color:#ddd;border:1px solid #444;padding:8px 14px;margin:4px;font:inherit;cursor:pointer;border-radius:4px}
 button:active{background:#333}
-#ver{color:#6cf;font-size:11.5px;font-weight:700;letter-spacing:.06em;margin-bottom:6px}
-#src{background:#08240a;color:#9f9;padding:8px;margin:8px 0;border:1px solid #0a3;white-space:pre-wrap;word-break:break-all;max-height:30vh;overflow:auto;font-size:12px}
+#ver{color:#f66;font-size:11.5px;font-weight:700;letter-spacing:.06em;margin-bottom:6px}
+#src{background:#240a08;color:#f99;padding:8px;margin:8px 0;border:1px solid #a33;white-space:pre-wrap;word-break:break-all;max-height:30vh;overflow:auto;font-size:12px}
 #ta{width:100%;height:70px;background:#111;color:#cc0;border:1px solid #333;padding:6px;font:inherit;box-sizing:border-box;margin-top:6px}
 #status{color:#888;margin-top:6px;font-size:12px}
 #status.run{color:#0f0}
 #ifr{position:absolute;left:-10px;width:1px;height:1px;border:0;opacity:.01}
 .crash{color:#f66;font-weight:bold}
 .success{color:#0f0}
+.info{color:#6cf}
 </style>
 <div id=ver></div>
 <div id=out></div>
 <div>
-<button onclick=fuzz()>FUZZ CVE-AWARE</button>
+<button onclick=fuzz()>FUZZ LOGIC</button>
 <button onclick=stop()>STOP</button>
 <button onclick=runManual()>RUN MANUAL</button>
 <button onclick=copySrc()>COPY</button>
 <button onclick=clr()>CLR</button>
 <button onclick=showCrash()>SHOW LAST CRASH</button>
-<button onclick=testSeed320221()>TEST SEED 320221</button>
 </div>
 <div id=src>--</div>
 <textarea id=ta placeholder="paste JS here, or leave empty to run generated seed"></textarea>
 <div id=status>Stopped at seed 0.</div>
 <iframe id=ifr sandbox="allow-scripts allow-same-origin"></iframe>
 <script>
-var VER='v38-CVE-AWARE';
+var VER='v39-LOGIC-HUNTER';
 var Q=new URLSearchParams(location.search);
-var MODE=+(Q.get('mode')||5); // Default to mode 5 for media parsers
-var MS=+(Q.get('ms')||3000); // Longer timeout for MTE
+var MS=+(Q.get('ms')||5000); // Longer timeout for logic bugs
 var START=Q.has('seed')?+Q.get('seed'):0;
 
 var ifr=document.getElementById('ifr');
@@ -45,230 +44,163 @@ var ta=document.getElementById('ta');
 var st=document.getElementById('status');
 var ver=document.getElementById('ver');
 
-ver.textContent='jscfuzz '+VER+' | MTE-HARDENED | mode '+MODE;
+ver.textContent='jscfuzz '+VER+' | MTE-BYPASS MODE | Logic bugs only';
 
 var seed=START,running=false,runOpen=false,iframeTimer=0,lastCrash='',activeSeed=START;
-var CORP=[];
-var K=["png","jpg","webp","gif","wav","wasm","ttf","woff","mp3","structuredClone","wasm","webgl"];
-var K_WEIGHTS=[15,15,20,10,10,5,10,5,5,30,10,5]; // Higher weight for structuredClone (CVE-2026-112659)
 
-// CVE-2026-112659: transferAnchors CAS race patterns
-var CVE_PATTERNS=[
-    // Pattern 0: Double transfer (the actual bug)
-    function(){return 'var ab=new ArrayBuffer(256,{maxByteLength:65536});var ta=new Uint8Array(ab);try{var c=structuredClone(ta,{transfer:[ab]});}catch(e){}try{var d=structuredClone(ta,{transfer:[ab]});}catch(e){}return "double-transfer";'},
-    // Pattern 1: Transfer during resize race
-    function(){return 'var ab=new ArrayBuffer(1024,{maxByteLength:8192});var ta=new Uint8Array(ab);var p=[];for(var i=0;i<100;i++)p.push(new ArrayBuffer(1048576));try{ta.transferToFixedLength();}catch(e){}try{ab.resize(4096);}catch(e){}try{structuredClone(ta,{transfer:[ab]});}catch(e){}return "resize-race";'},
-    // Pattern 2: Multiple views same buffer transfer
-    function(){return 'var ab=new ArrayBuffer(512,{maxByteLength:2048});var t1=new Uint8Array(ab);var t2=new Uint8Array(ab);var t3=new Float64Array(ab);try{structuredClone(t1,{transfer:[ab]});}catch(e){}try{t2[0]=0x41;}catch(e){}try{t3[0]=1.1;}catch(e){}return "multi-view";'},
-    // Pattern 3: Transfer + grow + transfer again
-    function(){return 'var ab=new ArrayBuffer(128,{maxByteLength:65536});var ta=new Uint8Array(ab);try{structuredClone(ta,{transfer:[ab]});}catch(e){}try{ab.resize(32768);}catch(e){}try{var tb=new Uint8Array(ab);structuredClone(tb,{transfer:[ab]});}catch(e){}return "transfer-grow-transfer";'},
-    // Pattern 4: Proxy type confusion during transfer
-    function(){return 'var ab=new ArrayBuffer(256,{maxByteLength:1024});var ta=new Uint8Array(ab);var pr=new Proxy(ta,{get:function(t,k){if(k==="length")return 0x7fffffff;return t[k];}});try{structuredClone(pr,{transfer:[ab]});}catch(e){}return "proxy-confuse";'},
-    // Pattern 5: Revocable proxy transfer
-    function(){return 'var ab=new ArrayBuffer(256,{maxByteLength:1024});var ta=new Uint8Array(ab);var r=Proxy.revocable(ta,{});try{structuredClone(r.proxy,{transfer:[ab]});}catch(e){}r.revoke();try{structuredClone(r.proxy,{transfer:[ab]});}catch(e){}return "revocable";'},
-    // Pattern 6: WASM memory + structuredClone
-    function(){return 'var wm=new WebAssembly.Memory({initial:1,maximum:4});var ab=wm.buffer;var ta=new Uint8Array(ab);try{structuredClone(ta,{transfer:[ab]});}catch(e){}try{wm.grow(1);}catch(e){}try{ta[0]=0x41;}catch(e){}return "wasm-transfer";'},
-    // Pattern 7: Detach during transfer callback
-    function(){return 'var ab=new ArrayBuffer(256,{maxByteLength:1024});var ta=new Uint8Array(ab);var evil={get byteLength(){try{ab.transfer();}catch(e){}return 256;}};try{structuredClone(ta,{transfer:[ab]});}catch(e){}return "detach-callback";'}
+// LOGIC BUG PATTERNS - No memory corruption, pure race conditions and type confusions
+var LOGIC_PATTERNS=[
+    // Pattern 0: structuredClone transfer race with Worker (no MTE trigger)
+    function(){return `
+        var ab=new ArrayBuffer(1024,{maxByteLength:4096});
+        var ta=new Uint8Array(ab);
+        var w=new Worker(URL.createObjectURL(new Blob(['onmessage=function(e){var d=e.data;try{d.resize(2048);}catch(x){}}'])));
+        w.postMessage(ab);
+        try{structuredClone(ta,{transfer:[ab]});}catch(e){}
+        w.terminate();
+        return "worker-race";
+    `},
+    
+    // Pattern 1: Proxy revocation during structuredClone serialization
+    function(){return `
+        var ab=new ArrayBuffer(256);
+        var ta=new Uint8Array(ab);
+        var handler={
+            get:function(t,p){
+                if(p===Symbol.iterator){throw new Error("revoke");}
+                return t[p];
+            }
+        };
+        var r=Proxy.revocable(ta,handler);
+        try{
+            var p=structuredClone(r.proxy,{transfer:[ab]});
+            r.revoke();
+            return "proxy-serialize:"+p.byteLength;
+        }catch(e){return "proxy-catch:"+e.name;}
+    `},
+    
+    // Pattern 2: Resizable ArrayBuffer size manipulation during transfer
+    function(){return `
+        var ab=new ArrayBuffer(512,{maxByteLength:8192});
+        var ta=new Uint8Array(ab);
+        Object.defineProperty(ab,'byteLength',{
+            get:function(){return 0x7fffffff;}
+        });
+        try{
+            var c=structuredClone(ta,{transfer:[ab]});
+            return "fake-size:"+c.byteLength;
+        }catch(e){return "size-catch:"+e.name;}
+    `},
+    
+    // Pattern 3: WebAssembly memory grow during structuredClone
+    function(){return `
+        var wm=new WebAssembly.Memory({initial:1,maximum:4});
+        var ab=wm.buffer;
+        var ta=new Uint8Array(ab);
+        setTimeout(function(){try{wm.grow(1);}catch(e){}},0);
+        try{structuredClone(ta,{transfer:[ab]});}catch(e){}
+        return "wasm-grow-race";
+    `},
+    
+    // Pattern 4: TypedArray subarray with out-of-bounds during clone
+    function(){return `
+        var ab=new ArrayBuffer(256,{maxByteLength:1024});
+        var ta=new Uint8Array(ab);
+        var sub=ta.subarray(128,256);
+        ab.resize(128); // Shrink below subarray range
+        try{structuredClone(sub,{transfer:[ab]});}catch(e){}
+        return "subarray-oob";
+    `},
+    
+    // Pattern 5: Multiple structuredClone calls same buffer (reference confusion)
+    function(){return `
+        var ab=new ArrayBuffer(256);
+        var ta=new Uint8Array(ab);
+        var results=[];
+        for(var i=0;i<5;i++){
+            try{results.push(structuredClone(ta,{transfer:[ab]}).byteLength);}catch(e){results.push("E");}
+        }
+        return "multi-clone:"+results.join(",");
+    `},
+    
+    // Pattern 6: Detach buffer during getByteLength callback
+    function(){return `
+        var ab=new ArrayBuffer(256);
+        var ta=new Uint8Array(ab);
+        var evil={
+            byteLength:{
+                valueOf:function(){
+                    try{postMessage(ab,[ab]);}catch(e){}
+                    return 256;
+                }
+            }
+        };
+        try{structuredClone(ta, evil);}catch(e){}
+        return "callback-detach";
+    `},
+    
+    // Pattern 7: SharedArrayBuffer race (if available)
+    function(){return `
+        if(typeof SharedArrayBuffer==='undefined')return "no-sab";
+        var sab=new SharedArrayBuffer(1024);
+        var ta=new Uint8Array(sab);
+        try{structuredClone(ta,{transfer:[sab]});}catch(e){return "sab-transfer:"+e.name;}
+        return "sab-ok";
+    `},
+    
+    // Pattern 8: Type confusion via Symbol.toPrimitive
+    function(){return `
+        var ab=new ArrayBuffer(256);
+        var ta=new Uint8Array(ab);
+        ta[Symbol.toPrimitive]=function(hint){
+            if(hint==='number'){ab.transfer();return 0;}
+            return ta;
+        };
+        try{structuredClone(ta,{transfer:[ab]});}catch(e){}
+        return "symbol-confuse";
+    `},
+    
+    // Pattern 9: Infinity/NaN in ArrayBuffer size calculations
+    function(){return `
+        var ab=new ArrayBuffer(256,{maxByteLength:Infinity});
+        try{ab.resize(NaN);}catch(e){}
+        try{ab.resize(-1);}catch(e){}
+        try{ab.resize(0x80000000);}catch(e){}
+        var ta=new Uint8Array(ab);
+        try{structuredClone(ta,{transfer:[ab]});}catch(e){}
+        return "infinity-nan";
+    `}
 ];
 
 function mk(s){return function(){s|=0;s=s+0x6D2B79F5|0;var t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 function ri(R,n){var x=Math.floor(R()*n)%n;return x<0?0:x}
-function hex(a){var s='';for(var i=0;i<a.length;i++)s+=(a[i]<16?'0':'')+a[i].toString(16);return s}
-function u32(a,o,v){a[o]=v>>>24&255;a[o+1]=v>>>16&255;a[o+2]=v>>>8&255;a[o+3]=v&255}
-function u16(a,o,v){a[o]=v>>>8&255;a[o+1]=v&255}
-function put(a,o,s){for(var i=0;i<s.length;i++)a[o+i]=s.charCodeAt(i)&255}
 function hb(){try{localStorage.setItem('HB',String(Date.now()))}catch(e){}}
-function hxPage(h){var a=new Uint8Array(h.length>>1);for(var i=0;i<a.length;i++)a[i]=parseInt(h.substr(i*2,2),16);return a}
 
-function saveCorp(){try{localStorage.setItem('CORP',JSON.stringify(CORP))}catch(e){}}
-function loadCorp(){try{var c=localStorage.getItem('CORP');if(c)CORP=JSON.parse(c)||[]}catch(e){CORP=[]}}
-function score(n){
-  if(!n)return 0;
-  if(n.indexOf('EXC_BAD_ACCESS')>0)return 100; // REAL CRASH
-  if(n.indexOf('SIGSEGV')>0)return 100;
-  if(n.indexOf('SIGBUS')>0)return 90;
-  if(n.indexOf('HANG')>0)return 50; // Potential infinite loop = bug
-  if(n.indexOf('RangeError')>0)return 5;
-  if(n.indexOf('EncodingError')>0)return 4;
-  return 1;
-}
-function addCorp(t,h,s){
-  if(s<10)return;
-  var i,c=0,wi=-1,ws=99;
-  for(i=0;i<CORP.length;i++){if(CORP[i].h===h)return;if(CORP[i].t===t)c++}
-  if(c>=3){
-    for(i=0;i<CORP.length;i++)if(CORP[i].t===t&&CORP[i].s<ws){ws=CORP[i].s;wi=i}
-    if(wi>=0&&ws<=s)CORP.splice(wi,1);else return;
-  }
-  CORP.push({t:t,h:h,s:s});
-  CORP.sort(function(a,b){return b.s-a.s});
-  if(CORP.length>50)CORP.length=50;
-  saveCorp();
-}
-function pickCorp(R,t){
-  var pool=[];
-  for(var i=0;i<CORP.length;i++)if(CORP[i].t===t)pool.push(CORP[i]);
-  if(!pool.length)return null;
-  pool.sort(function(a,b){return b.s-a.s});
-  return pool[ri(R,pool.length)];
-}
-
-// Weighted random selection
-function pickType(R){
-  var total=0,i;
-  for(i=0;i<K_WEIGHTS.length;i++)total+=K_WEIGHTS[i];
-  var r=R()*total;
-  for(i=0;i<K_WEIGHTS.length;i++){r-=K_WEIGHTS[i];if(r<=0)return i;}
-  return 0;
-}
-
-function fields(t,a){
-  var i,f;
-  if(t==="jpg"){
-    for(i=2;i<a.length-9;i++)if(a[i]===255&&(a[i+1]===192||a[i+1]===193||a[i+1]===194))return [[i+2,2],[i+5,2],[i+7,2],[i+9,1]];
-    return [];
-  }
-  if(t==="png"){
-    f=[[16,4],[20,4]];
-    for(i=0;i<a.length-8;i++)if(a[i]===73&&a[i+1]===68&&a[i+2]===65&&a[i+3]===84)f.push([i-4,4]);
-    return f;
-  }
-  if(t==="gif"){
-    f=[[6,2],[8,2],[71,1]];
-    for(i=0;i<a.length-9;i++)if(a[i]===44)f.push([i+5,2],[i+7,2],[i+9,1]);
-    return f;
-  }
-  if(t==="webp"){
-    f=[[4,4]];
-    for(i=0;i<a.length-7;i++)if(a[i]===86&&a[i+1]===80&&a[i+2]===56)f.push([i+4,4]);
-    return f;
-  }
-  return [];
-}
-
-function mut(a,R,t){
-  var f=fields(t,a),k=Math.floor(R()*10),e,o,w,vv,p;
-  if(k<5&&f.length){
-    e=f[ri(R,f.length)];o=e[0];w=e[1];
-    if(o>=0&&o+w<=a.length){
-      if(w===1)vv=[0,1,2,127,255][ri(R,5)];
-      else if(w===2)vv=[0,1,2,32767,65535][ri(R,5)];
-      else{var v=[0,1,2,2147483647,4294967295,a.length+1,a.length*2,a.length+4096];vv=v[ri(R,v.length)]}
-      if(w===1)a[o]=vv;else if(w===2)u16(a,o,vv);else u32(a,o,vv);
+function rs39(sd){
+    var R=mk(sd);
+    var s='"use strict";\nvar results=[];\n';
+    
+    // Run 3 random logic patterns
+    for(var i=0;i<3;i++){
+        var pat=LOGIC_PATTERNS[ri(R,LOGIC_PATTERNS.length)];
+        s+='try{results.push('+pat()+');}catch(e){results.push("ERR:"+e.name);}\n';
     }
-  }
-  else if(k<7&&a.length>20)return a.subarray(0,16+Math.floor(R()*(a.length-16)));
-  else if(k<9&&a.length>24){p=Math.floor(a.length/2)+Math.floor(R()*(a.length/2-1));a[p]=255}
-  else if(a.length>24){p=Math.floor(a.length/2)+Math.floor(R()*(a.length/2-1));a[p]=Math.floor(R()*256)}
-  return a;
+    
+    return s+'return results.join("|");';
 }
 
-function dataB(u){var b=atob(u.split(',')[1]),a=new Uint8Array(b.length),i;for(i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return a}
-function cvs(type){
-  var w=2+Math.floor(Math.random()*20),h=2+Math.floor(Math.random()*20);
-  var c=document.createElement('canvas');c.width=w;c.height=h;
-  var x=c.getContext('2d');
-  x.fillStyle='#37a';x.fillRect(0,0,w,h);
-  x.fillStyle='#e94';x.fillRect(0,0,Math.max(1,w>>1),Math.max(1,h>>1));
-  x.fillStyle='#fff';x.fillRect(0,0,1,1);
-  return dataB(c.toDataURL(type));
-}
-function mkgif(){return new Uint8Array([71,73,70,56,57,97,1,0,1,0,128,0,0,0,0,0,255,255,255,44,0,0,0,0,1,0,1,0,0,2,2,68,1,0,59])}
-function mkwav(R){
-  var n=32+Math.floor(R()*64),a=new Uint8Array(44+n),i;
-  put(a,0,"RIFF");u32(a,4,36+n);put(a,8,"WAVE");put(a,12,"fmt ");u32(a,16,16);
-  u16(a,20,1);u16(a,22,1);u32(a,24,8000);u32(a,28,8000);u16(a,32,1);u16(a,34,8);
-  put(a,36,"data");u32(a,40,n);
-  for(i=44;i<44+n;i++)a[i]=128+(Math.floor(R()*64)-32);
-  return a}
-function mkwasm(){return new Uint8Array([0,97,115,109,1,0,0,0,0,5,4,110,97,109,101])}
-function mkfnt(R,w){
-  var n=40+Math.floor(R()*40),a=new Uint8Array(n+200),o,i;
-  if(w){put(a,0,"wOFF");u32(a,4,65536);u32(a,8,n+44);u16(a,12,1);o=44}
-  else{a[0]=0;a[1]=1;a[2]=0;a[3]=0;u16(a,4,1);o=12}
-  for(i=o;i<a.length;i++)a[i]=Math.floor(R()*256);
-  return a}
-function mkmp3(R){
-  var nf=4+Math.floor(R()*4),fl=417,a=new Uint8Array(20+nf*fl),i,p;
-  put(a,0,"ID3");a[3]=3;a[4]=0;a[5]=0;a[6]=0;a[7]=0;a[8]=0;a[9]=10;
-  for(i=10;i<20;i++)a[i]=Math.floor(R()*256);
-  p=20;
-  for(i=0;i<nf;i++){a[p]=255;a[p+1]=251;a[p+2]=144;a[p+3]=100;p+=fl}
-  return a.subarray(0,p)}
-
-function by(t,R){
-  if(t==="png")return cvs("image/png");
-  if(t==="jpg")return cvs("image/jpeg");
-  if(t==="webp")return cvs("image/webp");
-  if(t==="gif")return mkgif();
-  if(t==="wav")return mkwav(R);
-  if(t==="wasm")return mkwasm();
-  if(t==="ttf")return mkfnt(R,0);
-  if(t==="woff")return mkfnt(R,1);
-  return mkmp3(R);
-}
-
-function callFor(t,i,h){
-  var H='hx("'+h+'")';
-  if(t==="ttf"||t==="woff")return 'new FontFace("f'+i+'",'+H+').load().then(function(f){return df(f,'+i+')})';
-  if(t==="wav"||t==="mp3")return 'AC.decodeAudioData('+H+'.buffer)';
-  if(t==="wasm")return 'WebAssembly.compile('+H+')';
-  return 'createImageBitmap(new Blob(['+H+'])).then(dw)';
-}
-
-// Generate CVE-aware payload
-function rs38(sd){
-  var R=mk(sd);
-  var s='"use strict";\n';
-  s+='var AC=null;try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}\n';
-  s+='var results=[];\n';
-  
-  // 40% chance: structuredClone CVE patterns
-  if(R()<0.4){
-    var pat=CVE_PATTERNS[ri(R,CVE_PATTERNS.length)];
-    s+='try{'+pat()+'results.push("cve:ok");}catch(e){results.push("cve:"+e.name);}\n';
-  }
-  
-  // 60% chance: media fuzzing
-  var t=K[pickType(R)];
-  var base=by(t,R);
-  var hs=[];
-  
-  for(var i=0;i<20;i++){
-    var b;
-    if(i===0)b=base;
-    else{
-      var c=(CORP.length&&R()<0.3)?pickCorp(R,t):null;
-      b=c?mut(hxPage(c.h),R,t):mut(new Uint8Array(base),R,t);
-    }
-    var h=hex(b);hs.push(h);
-    s+='try{await A("'+t+'",'+i+','+callFor(t,i,h)+');}catch(e){results.push("'+t+':"+e.name);}\n';
-  }
-  
-  return {code:s,hs:hs,expr:'results.join(";")'};
-}
-
-function PRE(p,sd,expr){
+function PRE(p,sd){
  return '<!doctype html><meta charset=utf-8><script>'+
- 'var SEED='+sd+';var R=mk(SEED);var TR=[];var RES=[];'+
+ 'var SEED='+sd+';var R=mk(SEED);var TR=[];'+
  'function mk(s){return function(){s|=0;s=s+0x6D2B79F5|0;var t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}'+
- 'function hx(s){var a=new Uint8Array(s.length>>1);for(var i=0;i<a.length;i++)a[i]=parseInt(s.substr(i*2,2),16);return a}'+
- 'function T(p,ms){return Promise.race([p,new Promise(function(_,j){setTimeout(function(){j("TO")},ms)})])}'+
- 'async function A(t,i,p){try{await T(p,800);TR.push(i+":"+t+":ok")}catch(e){TR.push(i+":"+t+":x:"+(e&&e.name||e||"E"))}}'+
- 'function dw(bm){try{var c=new OffscreenCanvas(8,8);c.getContext("2d").drawImage(bm,0,0)}catch(e){}return bm}'+
- 'function df(f,i){try{document.fonts.add(f);var c=document.createElement("canvas").getContext("2d");c.font="12px \\"f"+i+"\\"";c.fillText("Ag",0,0)}catch(e){}return f}'+
- 'var COLD=async function(){TR=[];R=mk(SEED);try{var rv=await (async function(){'+p+';return '+expr+'})();if(rv!==undefined)return String(rv)}catch(e){TR.push("999:top:"+(e&&e.name))}TR.sort(function(a,b){return parseInt(a)-parseInt(b)});return TR.join(";")};'+
+ 'var COLD=async function(){try{return await (async function(){'+p+'})();}catch(e){return "CRASH:"+e.name+":"+e.message;}};'+
  '(async function(){var c=await COLD();var h=await COLD();parent.postMessage({k:"r",cold:c,hot:h},"*")})()'+
  '<\/script>';
 }
 
-function killIframe(){
-  try{ifr.contentWindow.location='about:blank'}catch(e){}
-  clearTimeout(iframeTimer);
-}
+function killIframe(){try{ifr.contentWindow.location='about:blank'}catch(e){}clearTimeout(iframeTimer);}
 
-function runInIframe(p,sd,ms,expr){
+function runInIframe(p,sd,ms){
  return new Promise(function(res){
   killIframe();
   var done=false;
@@ -276,19 +208,8 @@ function runInIframe(p,sd,ms,expr){
   function onmsg(e){if(!e.data||e.data.k!=='r')return;fin(e.data)}
   window.addEventListener('message',onmsg);
   iframeTimer=setTimeout(function(){fin({k:'r',cold:'HANG',hot:'HANG'})},ms);
-  ifr.srcdoc=PRE(p,sd,expr);
+  ifr.srcdoc=PRE(p,sd);
  });
-}
-
-function learn(trace,hs){
-  if(!trace)return;
-  var parts=trace.split(';');
-  for(var i=0;i<parts.length;i++){
-    var m=parts[i].match(/^(\d+):(\w+):(.*)$/);
-    if(!m)continue;
-    var h=hs[+m[1]];
-    if(h)addCorp(m[2],h,score(parts[i]));
-  }
 }
 
 async function go(useManual){
@@ -297,79 +218,58 @@ async function go(useManual){
  activeSeed=useManual?'MANUAL':seed;
  try{localStorage.setItem('LASEED',String(activeSeed))}catch(e){}
  
- var p,hs=[],expr='undefined';
- if(useManual&&ta.value.trim()){
-   p=ta.value.trim();
-   expr='undefined';
- }
- else{
-   var o38=rs38(seed);
-   p=o38.code;hs=o38.hs;expr=o38.expr;
- }
+ var p;
+ if(useManual&&ta.value.trim()){p=ta.value.trim();}
+ else{p=rs39(seed);}
  
  src.textContent='-- seed '+activeSeed+'\n'+p;
  try{localStorage.setItem('LSRC',p);localStorage.setItem('LRUN',String(seed))}catch(e){}
  hb();
- st.className='run';st.textContent='Running seed '+activeSeed+'... corpus='+CORP.length;
+ st.className='run';st.textContent='Running seed '+activeSeed+'...';
  
- var o=await runInIframe(p,seed,MS,expr);
+ var o=await runInIframe(p,seed,MS);
  runOpen=false;
  
  var stx;
  if(o.cold==='HANG'){
-   stx='<span class="crash">HANG/CRASH killed at '+MS+'ms</span>';
+   stx='<span class="crash">HANG/CRASH - Possible infinite loop or deadlock</span>';
    lastCrash=p;
    try{localStorage.setItem('LCRASH',JSON.stringify({seed:activeSeed,prog:p}))}catch(e){}
-   // Also try to get actual crash info
-   try{
-     var crashInfo={
-       seed:activeSeed,
-       time:new Date().toISOString(),
-       ua:navigator.userAgent,
-       prog:p.substring(0,1000)
-     };
-     localStorage.setItem('CRASH_'+Date.now(),JSON.stringify(crashInfo));
-   }catch(e){}
  }
- else if(o.cold===o.hot){
-   stx='<span class="success">same: '+o.cold.substring(0,100)+'</span>';
-   if(hs.length)learn(o.cold,hs);
+ else if(o.cold!==o.hot){
+   stx='<span class="crash">DIVERGE! cold='+o.cold+' hot='+o.hot+'</span>';
+   lastCrash=p;
+   try{localStorage.setItem('LCRASH',JSON.stringify({seed:activeSeed,prog:p}))}catch(e){}
+ }
+ else if(o.cold.indexOf('CRASH:')===0){
+   stx='<span class="crash">'+o.cold+'</span>';
+   lastCrash=p;
+   try{localStorage.setItem('LCRASH',JSON.stringify({seed:activeSeed,prog:p}))}catch(e){}
  }
  else{
-   stx='<span class="crash">DIVERGE cold='+o.cold.substring(0,50)+' hot='+o.hot.substring(0,50)+'</span>';
-   lastCrash=p;
-   try{localStorage.setItem('jscfuzz-div',p)}catch(e){}
+   stx='<span class="success">same: '+o.cold+'</span>';
  }
  
  var line='<span style="color:#aaa">-- seed '+activeSeed+'</span>\n  '+stx;
  out.innerHTML+=line+'\n';out.scrollTop=out.scrollHeight;
- while(out.childNodes.length>200)out.removeChild(out.firstChild);
+ while(out.childNodes.length>100)out.removeChild(out.firstChild);
  
- if(!running){st.className='';st.textContent='Stopped at seed '+activeSeed+'. corpus='+CORP.length;return;}
+ if(!running){st.className='';st.textContent='Stopped at seed '+activeSeed+'.';return;}
  seed++;activeSeed=seed;
  try{localStorage.setItem('LASEED',String(activeSeed))}catch(e){}
- st.className='run';st.textContent='Running seed '+activeSeed+'... corpus='+CORP.length;
- if(running)setTimeout(function(){go(false)},100); // Slower for MTE
+ st.className='run';st.textContent='Running seed '+activeSeed+'...';
+ if(running)setTimeout(function(){go(false)},50);
 }
 
 function fuzz(){running=true;st.className='run';go(false);}
-function stop(){running=false;st.className='';st.textContent='Stopped at seed '+activeSeed+'. corpus='+CORP.length;}
+function stop(){running=false;st.className='';st.textContent='Stopped at seed '+activeSeed+'.';}
 function runManual(){running=false;st.className='';st.textContent='Running manual...';go(true);}
 function copySrc(){navigator.clipboard.writeText(src.textContent).then(function(){st.className='';st.textContent='Copied.'})}
 function clr(){out.innerHTML='';st.className='';st.textContent='Cleared — seed='+seed;}
 function showCrash(){try{var c=localStorage.getItem('LCRASH');if(c){var o=JSON.parse(c);src.textContent='-- LAST CRASH seed '+o.seed+'\n'+o.prog;st.className='';st.textContent='Loaded last crash.'}else{st.className='';st.textContent='No crash stored.'}}catch(e){}}
 
-// Test the specific seed that had JIT DIVERGE on iPad
-function testSeed320221(){
-  seed=320221;
-  running=false;
-  st.className='';st.textContent='Testing seed 320221 (iPad JIT DIVERGE)...';
-  go(false);
-}
-
 window.addEventListener('error',function(e){out.innerHTML+='<span class="crash">PAGE ERROR: '+e.message+'</span>\n';out.scrollTop=out.scrollHeight;});
 
-loadCorp();
 try{
  var ps=localStorage.getItem('LRUN');
  var pa=localStorage.getItem('LASEED');
@@ -378,6 +278,5 @@ try{
  if(ps!==null&&!Q.has('seed')){seed=+ps;}
  if(pa!==null&&pa!=='MANUAL'){activeSeed=+pa;}
 }catch(e){}
-if(!ta.value.trim())ta.value='structuredClone([new Uint8Array(64)])';
-st.textContent='Stopped at seed '+activeSeed+'. mode='+MODE+' ms='+MS+' corpus='+CORP.length;
+st.textContent='Stopped at seed '+activeSeed+'. ms='+MS;
 </script>
