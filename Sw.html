@@ -3,9 +3,12 @@
 self.addEventListener('message', function(e) {
     if (e.data.cmd === 'hammer') {
         var buf = e.data.buf;
-        for (var i = 0; i < 100000; i++) {
+        function hammer(i) {
+            if (i >= 100000) return;
             try { buf.resize(i % 2 ? 65536 : 256); } catch(x) {}
+            setTimeout(function() { hammer(i + 1); }, 0);
         }
+        hammer(0);
     }
 });
 </script>
