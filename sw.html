@@ -1,10 +1,11 @@
 <!doctype html>
 <script>
 var ab = new ArrayBuffer(256, {maxByteLength: 65536});
-function hammer(i) {
-    if (i >= 1000000) return;
-    try { ab.resize(i % 2 ? 65536 : 256); } catch(e) {}
-    setTimeout(function() { hammer(i + 1); }, 0);
+async function hammer() {
+    for (var i = 0; i < 1000000; i++) {
+        try { ab.resize(i % 2 ? 65536 : 256); } catch(e) {}
+        await new Promise(r => setTimeout(r, 0));
+    }
 }
-hammer(0);
+hammer();
 </script>
