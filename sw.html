@@ -1,13 +1,8 @@
 <!doctype html>
 <script>
-var channel = new BroadcastChannel('race');
-channel.onmessage = function(e) {
-    if (e.data.cmd === 'hammer') {
-        channel.postMessage('received');
-        var buf = e.data.buf;
-        for (var i = 0; i < 1000; i++) {
-            try { buf.resize(i % 2 ? 65536 : 256); } catch(x) {}
-        }
-    }
-};
+// Auto-hammer on load
+var ab = new ArrayBuffer(256, {maxByteLength: 65536});
+for (var i = 0; i < 100000; i++) {
+    try { ab.resize(i % 2 ? 65536 : 256); } catch(e) {}
+}
 </script>
