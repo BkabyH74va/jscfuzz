@@ -1,20 +1,20 @@
 <!doctype html>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<title>jscfuzz v39-FIXED</title>
+<title>jscfuzz v40 - FAKE BYTE LENGTH</title>
 <style>
 body{background:#000;color:#aaa;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:8px}
 #out{white-space:pre-wrap;word-break:break-all;max-height:50vh;overflow:auto}
 button{background:#222;color:#ddd;border:1px solid #444;padding:8px 14px;margin:4px;cursor:pointer}
-#ver{color:#f66;font-weight:700}
-#src{background:#240a08;color:#f99;padding:8px;margin:8px 0;white-space:pre-wrap;max-height:30vh;overflow:auto}
-#status{color:#888}
+#ver{color:#f66;font-weight:700;margin-bottom:6px}
+#src{background:#240a08;color:#f99;padding:8px;margin:8px 0;white-space:pre-wrap;word-break:break-all;max-height:30vh;overflow:auto;font-size:12px}
+#status{color:#888;margin-top:6px}
 #status.run{color:#0f0}
 #ifr{position:absolute;left:-10px;width:1px;height:1px;opacity:.01}
 .crash{color:#f66;font-weight:bold}
 .success{color:#0f0}
 </style>
-<div id=ver>jscfuzz v39-FIXED | MTE-BYPASS</div>
+<div id=ver>jscfuzz v40 - FAKE BYTE LENGTH ATTACK</div>
 <div id=out></div>
 <div>
 <button onclick=fuzz()>FUZZ</button>
@@ -27,15 +27,37 @@ button{background:#222;color:#ddd;border:1px solid #444;padding:8px 14px;margin:
 <script>
 var seed=0,running=false,runOpen=false,iframeTimer=0,lastCrash='';
 
+// FAKE BYTE LENGTH PATTERNS - Target structuredClone type confusion
 var PATTERNS=[
-function(){return 'var ab=new ArrayBuffer(256,{maxByteLength:1024});var ta=new Uint8Array(ab);try{structuredClone(ta,{transfer:[ab]});return "ok";}catch(e){return "err:"+e.name;}'},
-function(){return 'var ab=new ArrayBuffer(512,{maxByteLength:8192});Object.defineProperty(ab,"byteLength",{get:function(){return 0x7fffffff;}});var ta=new Uint8Array(ab);try{var c=structuredClone(ta,{transfer:[ab]});return "fake:"+c.byteLength;}catch(e){return "catch:"+e.name;}'},
-function(){return 'var ab=new ArrayBuffer(1024,{maxByteLength:4096});var ta=new Uint8Array(ab);var w=new Worker(URL.createObjectURL(new Blob(["onmessage=function(e){try{e.data.resize(2048);}catch(x){}}"])));w.postMessage(ab);try{structuredClone(ta,{transfer:[ab]});}catch(e){}w.terminate();return "worker";'},
-function(){return 'var ab=new ArrayBuffer(256);var ta=new Uint8Array(ab);var r=Proxy.revocable(ta,{});try{structuredClone(r.proxy,{transfer:[ab]});r.revoke();return "proxy-ok";}catch(e){return "proxy:"+e.name;}'},
-function(){return 'var ab=new ArrayBuffer(256,{maxByteLength:Infinity});try{ab.resize(NaN);}catch(e){}try{ab.resize(-1);}catch(e){}var ta=new Uint8Array(ab);try{structuredClone(ta,{transfer:[ab]});}catch(e){}return "inf";'},
-function(){return 'var wm=new WebAssembly.Memory({initial:1,maximum:4});var ab=wm.buffer;var ta=new Uint8Array(ab);setTimeout(function(){try{wm.grow(1);}catch(e){}},0);try{structuredClone(ta,{transfer:[ab]});}catch(e){}return "wasm";'},
-function(){return 'var ab=new ArrayBuffer(256);var ta=new Uint8Array(ab);ta[Symbol.toPrimitive]=function(h){if(h==="number"){ab.transfer();return 0;}return ta;};try{structuredClone(ta,{transfer:[ab]});}catch(e){}return "sym";'},
-function(){return 'var ab=new ArrayBuffer(256,{maxByteLength:1024});var ta=new Uint8Array(ab);var sub=ta.subarray(128,256);ab.resize(128);try{structuredClone(sub,{transfer:[ab]});}catch(e){}return "sub";'}
+// Pattern 0: Fake byteLength = 0 (underflow)
+function(){return 'var ab=new ArrayBuffer(256);var ta=new Uint8Array(ab);Object.defineProperty(ab,"byteLength",{get:function(){return 0;}});try{var c=structuredClone(ta,{transfer:[ab]});return "zero:"+c.byteLength;}catch(e){return "zero-err:"+e.name;}'},
+
+// Pattern 1: Fake byteLength changes during clone (grows)
+function(){return 'var ab=new ArrayBuffer(256);var ta=new Uint8Array(ab);var fake=256;Object.defineProperty(ab,"byteLength",{get:function(){fake=fake*2;return fake;}});try{var c=structuredClone(ta,{transfer:[ab]});return "grow:"+c.byteLength;}catch(e){return "grow-err:"+e.name;}'},
+
+// Pattern 2: Negative byteLength (signed integer bug)
+function(){return 'var ab=new ArrayBuffer(256);var ta=new Uint8Array(ab);Object.defineProperty(ab,"byteLength",{get:function(){return -1;}});try{var c=structuredClone(ta,{transfer:[ab]});return "neg:"+c.byteLength;}catch(e){return "neg-err:"+e.name;}'},
+
+// Pattern 3: byteLength = 0xFFFFFFFF (32-bit overflow)
+function(){return 'var ab=new ArrayBuffer(256);var ta=new Uint8Array(ab);Object.defineProperty(ab,"byteLength",{get:function(){return 0xFFFFFFFF;}});try{var c=structuredClone(ta,{transfer:[ab]});return "max:"+c.byteLength;}catch(e){return "max-err:"+e.name;}'},
+
+// Pattern 4: byteLength getter detaches buffer (UAF)
+function(){return 'var ab=new ArrayBuffer(256);var ta=new Uint8Array(ab);Object.defineProperty(ab,"byteLength",{get:function(){try{ab.transfer();}catch(e){}return 256;}});try{var c=structuredClone(ta,{transfer:[ab]});return "detach:"+c.byteLength;}catch(e){return "detach-err:"+e.name;}'},
+
+// Pattern 5: byteLength getter resizes to huge
+function(){return 'var ab=new ArrayBuffer(256,{maxByteLength:0x10000});var ta=new Uint8Array(ab);Object.defineProperty(ab,"byteLength",{get:function(){try{ab.resize(0x10000);}catch(e){}return 0x10000;}});try{var c=structuredClone(ta,{transfer:[ab]});return "huge:"+c.byteLength;}catch(e){return "huge-err:"+e.name;}'},
+
+// Pattern 6: Multiple getters conflicting (TOCTOU)
+function(){return 'var ab=new ArrayBuffer(256);var ta=new Uint8Array(ab);var count=0;Object.defineProperty(ab,"byteLength",{get:function(){count++;if(count==1)return 256;if(count==2)return 512;return 1024;}});try{var c=structuredClone(ta,{transfer:[ab]});return "multi:"+c.byteLength+":count:"+count;}catch(e){return "multi-err:"+e.name;}'},
+
+// Pattern 7: byteLength + detach + resize combo
+function(){return 'var ab=new ArrayBuffer(256,{maxByteLength:4096});var ta=new Uint8Array(ab);var evil=false;Object.defineProperty(ab,"byteLength",{get:function(){if(!evil){evil=true;try{ab.resize(4096);}catch(e){}}return 4096;}});try{var c=structuredClone(ta,{transfer:[ab]});return "combo:"+c.byteLength;}catch(e){return "combo-err:"+e.name;}'},
+
+// Pattern 8: byteLength returns object with valueOf
+function(){return 'var ab=new ArrayBuffer(256);var ta=new Uint8Array(ab);Object.defineProperty(ab,"byteLength",{get:function(){return {valueOf:function(){try{ab.transfer();}catch(e){}return 256;}};}});try{var c=structuredClone(ta,{transfer:[ab]});return "obj:"+c.byteLength;}catch(e){return "obj-err:"+e.name;}'},
+
+// Pattern 9: byteLength getter throws on second call
+function(){return 'var ab=new ArrayBuffer(256);var ta=new Uint8Array(ab);var first=true;Object.defineProperty(ab,"byteLength",{get:function(){if(first){first=false;return 256;}throw new Error("second");}});try{var c=structuredClone(ta,{transfer:[ab]});return "throw:"+c.byteLength;}catch(e){return "throw-err:"+e.name;}'}
 ];
 
 function mk(s){return function(){s|=0;s=s+0x6D2B79F5|0;var t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
@@ -53,7 +75,7 @@ return s;
 }
 
 function PRE(p){
-return '<!doctype html><meta charset=utf-8><script>var C=async function(){try{return await(async function(){'+p+'})();}catch(e){return "CRASH:"+e.name;}};C().then(function(c){C().then(function(h){parent.postMessage({k:"r",cold:c,hot:h},"*")})});<\/script>';
+return '<!doctype html><meta charset=utf-8><script>var C=async function(){try{return await(async function(){'+p+'})();}catch(e){return "CRASH:"+e.name+":"+e.message;}};C().then(function(c){C().then(function(h){parent.postMessage({k:"r",cold:c,hot:h},"*")})});<\/script>';
 }
 
 function kill(){try{ifr.contentWindow.location='about:blank'}catch(e){}clearTimeout(iframeTimer);}
@@ -80,8 +102,8 @@ document.getElementById('status').textContent='Running seed '+seed+'...';
 var o=await run(p,5000);
 runOpen=false;
 var stx;
-if(o.cold==='HANG'){stx='<span class="crash">HANG/CRASH</span>';lastCrash=p;}
-else if(o.cold!==o.hot){stx='<span class="crash">DIVERGE! '+o.cold+' vs '+o.hot+'</span>';lastCrash=p;}
+if(o.cold==='HANG'){stx='<span class="crash">HANG/CRASH - INFINITE LOOP</span>';lastCrash=p;}
+else if(o.cold!==o.hot){stx='<span class="crash">DIVERGE! cold='+o.cold+' hot='+o.hot+'</span>';lastCrash=p;}
 else if(o.cold.indexOf('CRASH:')===0){stx='<span class="crash">'+o.cold+'</span>';lastCrash=p;}
 else{stx='<span class="success">'+o.cold+'</span>';}
 var line='<div>-- seed '+seed+'</div><div>'+stx+'</div>';
