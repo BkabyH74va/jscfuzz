@@ -1,9 +1,7 @@
 <!doctype html>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta http-equiv="Pragma" content="no-cache">
-<meta http-equiv="Expires" content="0">
-<title>jscfuzz v37</title>
+<title>jscfuzz v38 - BUURZA CVE-AWARE</title>
 <style>
 body{background:#000;color:#aaa;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;padding:8px}
 #out{white-space:pre-wrap;word-break:break-all;max-height:50vh;overflow:auto;color:#aaa}
@@ -15,30 +13,30 @@ button:active{background:#333}
 #status{color:#888;margin-top:6px;font-size:12px}
 #status.run{color:#0f0}
 #ifr{position:absolute;left:-10px;width:1px;height:1px;border:0;opacity:.01}
+.crash{color:#f66;font-weight:bold}
+.success{color:#0f0}
 </style>
 <div id=ver></div>
 <div id=out></div>
 <div>
-<button onclick=fuzz()>FUZZ</button>
+<button onclick=fuzz()>FUZZ CVE-AWARE</button>
 <button onclick=stop()>STOP</button>
-<button onclick=runManual()>RUN</button>
+<button onclick=runManual()>RUN MANUAL</button>
 <button onclick=copySrc()>COPY</button>
 <button onclick=clr()>CLR</button>
 <button onclick=showCrash()>SHOW LAST CRASH</button>
+<button onclick=testSeed320221()>TEST SEED 320221</button>
 </div>
 <div id=src>--</div>
 <textarea id=ta placeholder="paste JS here, or leave empty to run generated seed"></textarea>
 <div id=status>Stopped at seed 0.</div>
 <iframe id=ifr sandbox="allow-scripts allow-same-origin"></iframe>
 <script>
-var VER='v37';
+var VER='v38-CVE-AWARE';
 var Q=new URLSearchParams(location.search);
-var MODE=+(Q.get('mode')||0);
-var MS=+(Q.get('ms')||2500);
-var NL=+(Q.get('n')||10);
-var BIG=Q.has('big'),SMALL=Q.has('small');
+var MODE=+(Q.get('mode')||5); // Default to mode 5 for media parsers
+var MS=+(Q.get('ms')||3000); // Longer timeout for MTE
 var START=Q.has('seed')?+Q.get('seed'):0;
-var PL=32,CW=8,MAXC=90,CAPT=3;
 
 var ifr=document.getElementById('ifr');
 var out=document.getElementById('out');
@@ -47,18 +45,35 @@ var ta=document.getElementById('ta');
 var st=document.getElementById('status');
 var ver=document.getElementById('ver');
 
-ver.textContent='jscfuzz '+VER+'  |  mode '+MODE;
+ver.textContent='jscfuzz '+VER+' | MTE-HARDENED | mode '+MODE;
 
 var seed=START,running=false,runOpen=false,iframeTimer=0,lastCrash='',activeSeed=START;
 var CORP=[];
-var K=["png","png","png","jpg","jpg","webp","gif","gif","wav","wasm","ttf","woff","mp3"];
-var FLD={wav:[[4,4],[22,2],[24,4],[28,4],[32,2],[40,4]],wasm:[[9,1]],
- ttf:[[4,2],[8,2]],woff:[[8,4],[12,2]],mp3:[[6,1],[7,1],[8,1],[9,1],[22,1],[23,1]]};
-var V1=[0,1,2,127,255],V2=[0,1,2,32767,65535],V4=[0,1,2,2147483647,4294967295];
+var K=["png","jpg","webp","gif","wav","wasm","ttf","woff","mp3","structuredClone","wasm","webgl"];
+var K_WEIGHTS=[15,15,20,10,10,5,10,5,5,30,10,5]; // Higher weight for structuredClone (CVE-2026-112659)
+
+// CVE-2026-112659: transferAnchors CAS race patterns
+var CVE_PATTERNS=[
+    // Pattern 0: Double transfer (the actual bug)
+    function(){return 'var ab=new ArrayBuffer(256,{maxByteLength:65536});var ta=new Uint8Array(ab);try{var c=structuredClone(ta,{transfer:[ab]});}catch(e){}try{var d=structuredClone(ta,{transfer:[ab]});}catch(e){}return "double-transfer";'},
+    // Pattern 1: Transfer during resize race
+    function(){return 'var ab=new ArrayBuffer(1024,{maxByteLength:8192});var ta=new Uint8Array(ab);var p=[];for(var i=0;i<100;i++)p.push(new ArrayBuffer(1048576));try{ta.transferToFixedLength();}catch(e){}try{ab.resize(4096);}catch(e){}try{structuredClone(ta,{transfer:[ab]});}catch(e){}return "resize-race";'},
+    // Pattern 2: Multiple views same buffer transfer
+    function(){return 'var ab=new ArrayBuffer(512,{maxByteLength:2048});var t1=new Uint8Array(ab);var t2=new Uint8Array(ab);var t3=new Float64Array(ab);try{structuredClone(t1,{transfer:[ab]});}catch(e){}try{t2[0]=0x41;}catch(e){}try{t3[0]=1.1;}catch(e){}return "multi-view";'},
+    // Pattern 3: Transfer + grow + transfer again
+    function(){return 'var ab=new ArrayBuffer(128,{maxByteLength:65536});var ta=new Uint8Array(ab);try{structuredClone(ta,{transfer:[ab]});}catch(e){}try{ab.resize(32768);}catch(e){}try{var tb=new Uint8Array(ab);structuredClone(tb,{transfer:[ab]});}catch(e){}return "transfer-grow-transfer";'},
+    // Pattern 4: Proxy type confusion during transfer
+    function(){return 'var ab=new ArrayBuffer(256,{maxByteLength:1024});var ta=new Uint8Array(ab);var pr=new Proxy(ta,{get:function(t,k){if(k==="length")return 0x7fffffff;return t[k];}});try{structuredClone(pr,{transfer:[ab]});}catch(e){}return "proxy-confuse";'},
+    // Pattern 5: Revocable proxy transfer
+    function(){return 'var ab=new ArrayBuffer(256,{maxByteLength:1024});var ta=new Uint8Array(ab);var r=Proxy.revocable(ta,{});try{structuredClone(r.proxy,{transfer:[ab]});}catch(e){}r.revoke();try{structuredClone(r.proxy,{transfer:[ab]});}catch(e){}return "revocable";'},
+    // Pattern 6: WASM memory + structuredClone
+    function(){return 'var wm=new WebAssembly.Memory({initial:1,maximum:4});var ab=wm.buffer;var ta=new Uint8Array(ab);try{structuredClone(ta,{transfer:[ab]});}catch(e){}try{wm.grow(1);}catch(e){}try{ta[0]=0x41;}catch(e){}return "wasm-transfer";'},
+    // Pattern 7: Detach during transfer callback
+    function(){return 'var ab=new ArrayBuffer(256,{maxByteLength:1024});var ta=new Uint8Array(ab);var evil={get byteLength(){try{ab.transfer();}catch(e){}return 256;}};try{structuredClone(ta,{transfer:[ab]});}catch(e){}return "detach-callback";'}
+];
 
 function mk(s){return function(){s|=0;s=s+0x6D2B79F5|0;var t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 function ri(R,n){var x=Math.floor(R()*n)%n;return x<0?0:x}
-function sz(){return SMALL?1024:BIG?(1<<24):(1<<14)}
 function hex(a){var s='';for(var i=0;i<a.length;i++)s+=(a[i]<16?'0':'')+a[i].toString(16);return s}
 function u32(a,o,v){a[o]=v>>>24&255;a[o+1]=v>>>16&255;a[o+2]=v>>>8&255;a[o+3]=v&255}
 function u16(a,o,v){a[o]=v>>>8&255;a[o+1]=v&255}
@@ -70,24 +85,25 @@ function saveCorp(){try{localStorage.setItem('CORP',JSON.stringify(CORP))}catch(
 function loadCorp(){try{var c=localStorage.getItem('CORP');if(c)CORP=JSON.parse(c)||[]}catch(e){CORP=[]}}
 function score(n){
   if(!n)return 0;
-  if(n.indexOf(':ok')>0)return 6;
-  if(n.indexOf('RangeError')>0||n.indexOf('IndexSizeError')>0)return 5;
+  if(n.indexOf('EXC_BAD_ACCESS')>0)return 100; // REAL CRASH
+  if(n.indexOf('SIGSEGV')>0)return 100;
+  if(n.indexOf('SIGBUS')>0)return 90;
+  if(n.indexOf('HANG')>0)return 50; // Potential infinite loop = bug
+  if(n.indexOf('RangeError')>0)return 5;
   if(n.indexOf('EncodingError')>0)return 4;
-  if(n.indexOf('NotSupportedError')>0||n.indexOf('SyntaxError')>0||n.indexOf('CompileError')>0)return 3;
-  if(n.indexOf('TypeError')>0||n.indexOf('TO')>0)return 2;
   return 1;
 }
 function addCorp(t,h,s){
-  if(s<4)return;
+  if(s<10)return;
   var i,c=0,wi=-1,ws=99;
   for(i=0;i<CORP.length;i++){if(CORP[i].h===h)return;if(CORP[i].t===t)c++}
-  if(c>=CAPT){
+  if(c>=3){
     for(i=0;i<CORP.length;i++)if(CORP[i].t===t&&CORP[i].s<ws){ws=CORP[i].s;wi=i}
     if(wi>=0&&ws<=s)CORP.splice(wi,1);else return;
   }
   CORP.push({t:t,h:h,s:s});
   CORP.sort(function(a,b){return b.s-a.s});
-  if(CORP.length>MAXC)CORP.length=MAXC;
+  if(CORP.length>50)CORP.length=50;
   saveCorp();
 }
 function pickCorp(R,t){
@@ -98,36 +114,13 @@ function pickCorp(R,t){
   return pool[ri(R,pool.length)];
 }
 
-var PAT=[
-function(){return 'var a=new Uint8Array(SZ);a[0]=1;return structuredClone(a)'},
-function(){return 'var b=new ArrayBuffer(SZ);var v=new DataView(b);v.setUint8(0,1);return structuredClone(v)'},
-function(){return 'var b=new ArrayBuffer(SZ);var v=new Uint8Array(b);return structuredClone([v,v])'},
-function(){return 'var v=new Float64Array(SZ>>3);return structuredClone(v)'},
-function(){return 'var v=new Uint8Array(SZ);return structuredClone(v,{transfer:[v.buffer]})'},
-function(){return 'var v=new Uint8Array(SZ);return structuredClone(v,{transfer:[v.buffer,v.buffer]})'},
-function(){return 'var v=new Uint8Array(SZ);var t=v.buffer;structuredClone(v,{transfer:[t]});return structuredClone(t)'},
-function(){return 'var v=new Uint8Array(SZ);var m=new Map();m.set("k",v);return structuredClone(m)'},
-function(){return 'var v=new Uint8Array(SZ);return structuredClone(new Set([v]))'},
-function(){return 'var v=new Uint8Array(SZ);return structuredClone([...v])'},
-function(){return 'var v=new Uint8Array(SZ);return structuredClone(v.subarray(1))'},
-function(){return 'var v=new BigInt64Array(SZ>>3);return structuredClone(v)'},
-function(){return 'var v=new Uint8Array(SZ);return structuredClone({a:{b:{c:v}}})'},
-function(){return 'var v=new Uint8Array(SZ);return structuredClone(new Proxy({a:v},{}))'},
-function(){return 'var v=new Uint8Array(SZ);var r=Proxy.revocable({},{});r.revoke();return structuredClone(r.proxy)'},
-function(){return 'var c=document.createElement("canvas");c.width=64;c.height=64;var x=c.getContext("2d");x.fillRect(0,0,8,8);return structuredClone(x.getImageData(0,0,64,64))'},
-function(){return 'var v=new Uint8Array(new Set([3,4,5]));return structuredClone(v)'},
-function(){return 'var v=new Uint8Array(SZ);var bc=new BroadcastChannel("c");bc.postMessage(v);return v'},
-function(){return 'var v=new Uint8Array(SZ);return structuredClone({[Symbol()]:v})'},
-function(){return 'var v=new Uint8Array(SZ);return structuredClone(new Date())&&structuredClone(v)'}
-];
-
-function rs(sd){
-  var R=mk(sd),s='"use strict";\nvar SZ='+sz()+',E=[],W=function(f,d){try{return f()}catch(e){E.push(e.name);return d}};\n';
-  for(var i=0;i<NL;i++){
-    var p=(MODE===1?PAT[i%PAT.length]:PAT[ri(R,PAT.length)])();
-    s+='W(function(){return (function(){'+p+'})()},0);\n';
-  }
-  return s+'return E.join(";")+"|ok";';
+// Weighted random selection
+function pickType(R){
+  var total=0,i;
+  for(i=0;i<K_WEIGHTS.length;i++)total+=K_WEIGHTS[i];
+  var r=R()*total;
+  for(i=0;i<K_WEIGHTS.length;i++){r-=K_WEIGHTS[i];if(r<=0)return i;}
+  return 0;
 }
 
 function fields(t,a){
@@ -151,7 +144,7 @@ function fields(t,a){
     for(i=0;i<a.length-7;i++)if(a[i]===86&&a[i+1]===80&&a[i+2]===56)f.push([i+4,4]);
     return f;
   }
-  return FLD[t]||[];
+  return [];
 }
 
 function mut(a,R,t){
@@ -159,9 +152,9 @@ function mut(a,R,t){
   if(k<5&&f.length){
     e=f[ri(R,f.length)];o=e[0];w=e[1];
     if(o>=0&&o+w<=a.length){
-      if(w===1)vv=V1[ri(R,V1.length)];
-      else if(w===2)vv=V2[ri(R,V2.length)];
-      else{var v=V4.slice();v.push(a.length+1,a.length*2,a.length+4096);vv=v[ri(R,v.length)]}
+      if(w===1)vv=[0,1,2,127,255][ri(R,5)];
+      else if(w===2)vv=[0,1,2,32767,65535][ri(R,5)];
+      else{var v=[0,1,2,2147483647,4294967295,a.length+1,a.length*2,a.length+4096];vv=v[ri(R,v.length)]}
       if(w===1)a[o]=vv;else if(w===2)u16(a,o,vv);else u32(a,o,vv);
     }
   }
@@ -224,42 +217,48 @@ function callFor(t,i,h){
   return 'createImageBitmap(new Blob(['+H+'])).then(dw)';
 }
 
-function rs5(sd){
-  var R=mk(sd),s='"use strict";\nvar AC=null;try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}\n';
-  s+='if(!window.FontFace)TR.push("noFF");\nvar q,i;\n';
-  var t=K[ri(R,K.length)],base=by(t,R),hs=[],ex='';
-  if(t==="ttf"||t==="woff")ex='new FontFace("f0",new Uint8Array(64)).load()';
-  else if(t==="wav"||t==="mp3")ex='new AudioContext().decodeAudioData(new Uint8Array(64).buffer)';
-  else if(t==="wasm")ex='WebAssembly.compile(new Uint8Array(64))';
-  else ex='createImageBitmap(new Blob([new Uint8Array(64)]))';
-  var i=0;
-  while(i<PL){
-    s+='q=[];\n';
-    for(var j=0;j<CW&&i<PL;j++,i++){
-      var b;
-      if(i===0)b=base;
-      else{
-        var c=(CORP.length&&R()<0.5)?pickCorp(R,t):null;
-        b=c?mut(hxPage(c.h),R,t):mut(new Uint8Array(base),R,t);
-      }
-      var h=hex(b);hs.push(h);
-      s+='q.push(A("'+t+'",'+i+','+callFor(t,i,h)+'));\n';
-    }
-    s+='await Promise.all(q);\n';
+// Generate CVE-aware payload
+function rs38(sd){
+  var R=mk(sd);
+  var s='"use strict";\n';
+  s+='var AC=null;try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}\n';
+  s+='var results=[];\n';
+  
+  // 40% chance: structuredClone CVE patterns
+  if(R()<0.4){
+    var pat=CVE_PATTERNS[ri(R,CVE_PATTERNS.length)];
+    s+='try{'+pat()+'results.push("cve:ok");}catch(e){results.push("cve:"+e.name);}\n';
   }
-  return {code:s,expr:ex,hs:hs};
+  
+  // 60% chance: media fuzzing
+  var t=K[pickType(R)];
+  var base=by(t,R);
+  var hs=[];
+  
+  for(var i=0;i<20;i++){
+    var b;
+    if(i===0)b=base;
+    else{
+      var c=(CORP.length&&R()<0.3)?pickCorp(R,t):null;
+      b=c?mut(hxPage(c.h),R,t):mut(new Uint8Array(base),R,t);
+    }
+    var h=hex(b);hs.push(h);
+    s+='try{await A("'+t+'",'+i+','+callFor(t,i,h)+');}catch(e){results.push("'+t+':"+e.name);}\n';
+  }
+  
+  return {code:s,hs:hs,expr:'results.join(";")'};
 }
 
-function PRE(p,sd){
+function PRE(p,sd,expr){
  return '<!doctype html><meta charset=utf-8><script>'+
- 'var SEED='+sd+';var R=mk(SEED);var TR=[];'+
+ 'var SEED='+sd+';var R=mk(SEED);var TR=[];var RES=[];'+
  'function mk(s){return function(){s|=0;s=s+0x6D2B79F5|0;var t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}'+
  'function hx(s){var a=new Uint8Array(s.length>>1);for(var i=0;i<a.length;i++)a[i]=parseInt(s.substr(i*2,2),16);return a}'+
  'function T(p,ms){return Promise.race([p,new Promise(function(_,j){setTimeout(function(){j("TO")},ms)})])}'+
- 'async function A(t,i,p){try{await T(p,600);TR.push(i+":"+t+":ok")}catch(e){TR.push(i+":"+t+":x:"+(e&&e.name||e||"E"))}}'+
+ 'async function A(t,i,p){try{await T(p,800);TR.push(i+":"+t+":ok")}catch(e){TR.push(i+":"+t+":x:"+(e&&e.name||e||"E"))}}'+
  'function dw(bm){try{var c=new OffscreenCanvas(8,8);c.getContext("2d").drawImage(bm,0,0)}catch(e){}return bm}'+
  'function df(f,i){try{document.fonts.add(f);var c=document.createElement("canvas").getContext("2d");c.font="12px \\"f"+i+"\\"";c.fillText("Ag",0,0)}catch(e){}return f}'+
- 'var COLD=async function(){TR=[];R=mk(SEED);try{var rv=await (async function(){'+p+'})();if(rv!==undefined)return String(rv)}catch(e){TR.push("999:top:"+(e&&e.name))}TR.sort(function(a,b){return parseInt(a)-parseInt(b)});return TR.join(";")};'+
+ 'var COLD=async function(){TR=[];R=mk(SEED);try{var rv=await (async function(){'+p+';return '+expr+'})();if(rv!==undefined)return String(rv)}catch(e){TR.push("999:top:"+(e&&e.name))}TR.sort(function(a,b){return parseInt(a)-parseInt(b)});return TR.join(";")};'+
  '(async function(){var c=await COLD();var h=await COLD();parent.postMessage({k:"r",cold:c,hot:h},"*")})()'+
  '<\/script>';
 }
@@ -269,7 +268,7 @@ function killIframe(){
   clearTimeout(iframeTimer);
 }
 
-function runInIframe(p,sd,ms){
+function runInIframe(p,sd,ms,expr){
  return new Promise(function(res){
   killIframe();
   var done=false;
@@ -277,7 +276,7 @@ function runInIframe(p,sd,ms){
   function onmsg(e){if(!e.data||e.data.k!=='r')return;fin(e.data)}
   window.addEventListener('message',onmsg);
   iframeTimer=setTimeout(function(){fin({k:'r',cold:'HANG',hot:'HANG'})},ms);
-  ifr.srcdoc=PRE(p,sd);
+  ifr.srcdoc=PRE(p,sd,expr);
  });
 }
 
@@ -297,29 +296,60 @@ async function go(useManual){
  runOpen=true;
  activeSeed=useManual?'MANUAL':seed;
  try{localStorage.setItem('LASEED',String(activeSeed))}catch(e){}
- var p,hs=[];
- if(useManual&&ta.value.trim()){p=ta.value.trim();}
- else if(MODE===5){var o5=rs5(seed);p=o5.code;hs=o5.hs;}
- else{p=rs(seed);}
+ 
+ var p,hs=[],expr='undefined';
+ if(useManual&&ta.value.trim()){
+   p=ta.value.trim();
+   expr='undefined';
+ }
+ else{
+   var o38=rs38(seed);
+   p=o38.code;hs=o38.hs;expr=o38.expr;
+ }
+ 
  src.textContent='-- seed '+activeSeed+'\n'+p;
  try{localStorage.setItem('LSRC',p);localStorage.setItem('LRUN',String(seed))}catch(e){}
  hb();
  st.className='run';st.textContent='Running seed '+activeSeed+'... corpus='+CORP.length;
- var o=await runInIframe(p,seed,MS);
+ 
+ var o=await runInIframe(p,seed,MS,expr);
  runOpen=false;
+ 
  var stx;
- if(o.cold==='HANG'){stx='HANG/CRASH killed at '+MS+'ms';lastCrash=p;try{localStorage.setItem('LCRASH',JSON.stringify({seed:activeSeed,prog:p}))}catch(e){}}
- else if(o.cold===o.hot){stx='<span style="color:#9f9">same: '+o.cold+' (JIT x10)</span>';if(MODE===5)learn(o.cold,hs);}
- else{stx='<span style="color:#f66">DIVERGE cold='+o.cold+' hot='+o.hot+'</span>';lastCrash=p;try{localStorage.setItem('jscfuzz-div',p)}catch(e){}}
+ if(o.cold==='HANG'){
+   stx='<span class="crash">HANG/CRASH killed at '+MS+'ms</span>';
+   lastCrash=p;
+   try{localStorage.setItem('LCRASH',JSON.stringify({seed:activeSeed,prog:p}))}catch(e){}
+   // Also try to get actual crash info
+   try{
+     var crashInfo={
+       seed:activeSeed,
+       time:new Date().toISOString(),
+       ua:navigator.userAgent,
+       prog:p.substring(0,1000)
+     };
+     localStorage.setItem('CRASH_'+Date.now(),JSON.stringify(crashInfo));
+   }catch(e){}
+ }
+ else if(o.cold===o.hot){
+   stx='<span class="success">same: '+o.cold.substring(0,100)+'</span>';
+   if(hs.length)learn(o.cold,hs);
+ }
+ else{
+   stx='<span class="crash">DIVERGE cold='+o.cold.substring(0,50)+' hot='+o.hot.substring(0,50)+'</span>';
+   lastCrash=p;
+   try{localStorage.setItem('jscfuzz-div',p)}catch(e){}
+ }
+ 
  var line='<span style="color:#aaa">-- seed '+activeSeed+'</span>\n  '+stx;
- if(o.cold==='HANG')line='<span style="color:#aaa">-- seed '+activeSeed+'</span>\n  <span style="color:#f66">HANG/CRASH killed at '+MS+'ms</span>';
  out.innerHTML+=line+'\n';out.scrollTop=out.scrollHeight;
- while(out.childNodes.length>500)out.removeChild(out.firstChild);
+ while(out.childNodes.length>200)out.removeChild(out.firstChild);
+ 
  if(!running){st.className='';st.textContent='Stopped at seed '+activeSeed+'. corpus='+CORP.length;return;}
  seed++;activeSeed=seed;
  try{localStorage.setItem('LASEED',String(activeSeed))}catch(e){}
  st.className='run';st.textContent='Running seed '+activeSeed+'... corpus='+CORP.length;
- if(running)setTimeout(function(){go(false)},0);
+ if(running)setTimeout(function(){go(false)},100); // Slower for MTE
 }
 
 function fuzz(){running=true;st.className='run';go(false);}
@@ -329,7 +359,15 @@ function copySrc(){navigator.clipboard.writeText(src.textContent).then(function(
 function clr(){out.innerHTML='';st.className='';st.textContent='Cleared — seed='+seed;}
 function showCrash(){try{var c=localStorage.getItem('LCRASH');if(c){var o=JSON.parse(c);src.textContent='-- LAST CRASH seed '+o.seed+'\n'+o.prog;st.className='';st.textContent='Loaded last crash.'}else{st.className='';st.textContent='No crash stored.'}}catch(e){}}
 
-window.addEventListener('error',function(e){out.innerHTML+='<span style="color:#f66">PAGE ERROR: '+e.message+'</span>\n';out.scrollTop=out.scrollHeight;});
+// Test the specific seed that had JIT DIVERGE on iPad
+function testSeed320221(){
+  seed=320221;
+  running=false;
+  st.className='';st.textContent='Testing seed 320221 (iPad JIT DIVERGE)...';
+  go(false);
+}
+
+window.addEventListener('error',function(e){out.innerHTML+='<span class="crash">PAGE ERROR: '+e.message+'</span>\n';out.scrollTop=out.scrollHeight;});
 
 loadCorp();
 try{
