@@ -1,18 +1,9 @@
 <!doctype html>
 <script>
-var ia = null;
-var buf = null;
-
 self.addEventListener('message', function(e) {
-    if (e.data.cmd === 'init') {
-        ia = new Int32Array(e.data.sab);
-        buf = e.data.buf;
-        Atomics.store(ia, 0, 1);
-    }
     if (e.data.cmd === 'hammer') {
-        // Hammer when ia[0] == 2
-        while (Atomics.load(ia, 0) !== 2) {}
-        for (var i = 0; i < 10000; i++) {
+        var buf = e.data.buf;
+        for (var i = 0; i < 100000; i++) {
             try { buf.resize(i % 2 ? 65536 : 256); } catch(x) {}
         }
     }
