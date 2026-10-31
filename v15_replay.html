@@ -1,0 +1,52 @@
+<!doctype html>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>V15-REPLAY</title>
+<body style="background:#000;color:#0f0;font:13px monospace;white-space:pre-wrap;margin:8px">
+<div id=o>[V15-REPLAY] probes + 2GB-clone confirm</div>
+<script>
+const o=document.getElementById('o');
+const log=m=>o.textContent+="\n"+m;
+window.addEventListener('error',e=>log("[ERR] "+e.message));
+log("[*] start");
+const PR=[
+ 'var c=new OffscreenCanvas(0,0);var g=c.getContext("2d");g.fillRect(0,0,1,1);"p0"',
+ 'var c=new OffscreenCanvas(0,0);c.getContext("2d").getImageData(0,0,1,1);"p1"',
+ 'var c=new OffscreenCanvas(1,1);var g=c.getContext("2d");g.putImageData(new ImageData(2,2),-1,-1);"p2"',
+ 'try{new ImageData(0,0);}catch(e){"p3 "+e.name}',
+ 'try{new ImageData(new Uint8ClampedArray(0),0,0);}catch(e){"p4 "+e.name}',
+ 'try{new ImageData(new Uint8ClampedArray(4),2,2);}catch(e){"p5 "+e.name}',
+ 'try{new ImageData(new Uint8ClampedArray(2),2,2);}catch(e){"p6 "+e.name}',
+ 'var c=new OffscreenCanvas(65536,1);c.getContext("2d").fillRect(0,0,1,1);"p7"',
+ 'var c=new OffscreenCanvas(1,65536);c.getContext("2d").getImageData(0,0,1,65536);"p8"',
+ 'var c=new OffscreenCanvas(2,2);var g=c.getContext("2d");g.drawImage(c,0,0);"p9"',
+ 'var c=new OffscreenCanvas(2,2);var g=c.getContext("2d");g.createPattern(c,"repeat");"p10"',
+ 'var c=new OffscreenCanvas(2,2);c.transferToImageBitmap();c.transferToImageBitmap();"p12"',
+ 'var c=new OffscreenCanvas(2,2);var b=c.transferToImageBitmap();var g=c.getContext("2d");g.drawImage(b,0,0);"p13"',
+ 'var g=new OffscreenCanvas(2,2).getContext("2d");g.setTransform(0,0,0,0,0,0);g.fillRect(0,0,1,1);g.getImageData(0,0,1,1);"p14"',
+ 'var g=new OffscreenCanvas(2,2).getContext("2d");g.fill(new Path2D("M0 0Z"));"p16"',
+ 'var c=new OffscreenCanvas(2,2);var g=c.getContext("webgl");g&&g.getParameter(g.MAX_TEXTURE_SIZE);"p17"',
+];
+(async()=>{
+  for(let i=0;i<PR.length;i++){
+    log("R"+i);
+    try{ log("R"+i+" -> "+eval(PR[i])); }catch(e){ log("R"+i+" "+e.name); }
+    await new Promise(r=>setTimeout(r,60));
+  }
+  log("[*] probes done. 2GB worker clone (Oct-27 signature test) in 2s...");
+  await new Promise(r=>setTimeout(r,2000));
+  const w=new Worker(URL.createObjectURL(new Blob([`
+onmessage=()=>{
+  try{
+    const big=new Float64Array(2**28);
+    const c=structuredClone(big);
+    postMessage("WCLONE-OK "+c.byteLength);
+  }catch(e){ postMessage("WCAUGHT "+e.name); }
+};`])));
+  w.onmessage=e=>log("worker: "+e.data);
+  w.postMessage("go");
+  setTimeout(()=>{
+    try{ const ctl=new Uint8Array(2**28); const c2=structuredClone(ctl); log("control 256MB clone OK "+c2.byteLength); }
+    catch(e){ log("control: "+e.name); }
+  }, 3000);
+})();
+</script>
