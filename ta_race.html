@@ -29,7 +29,6 @@ onmessage=async e=>{
     let i=0;
     while(true){
       try{mem.grow(1);}catch(_){}
-      // CONFUSION GATE: shared WASM buffers are always 64KB multiples
       const bl=mem.buffer.byteLength;
       if(bl&0xFFFF){
         lg("CONFUSED bl="+bl);
