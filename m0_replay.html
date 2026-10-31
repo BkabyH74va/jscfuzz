@@ -1,0 +1,48 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>M0-REPLAY</title>
+<body style="background:#000;color:#0f0;font:13px monospace;white-space:pre-wrap;margin:8px">
+<div id=o>[M0-REPLAY] recovered v16.3 mode-0 patterns + seed-320221</div>
+<script>
+const o=document.getElementById('o');
+const log=m=>{o.textContent+="\n"+m;};
+window.addEventListener('error',e=>log("[ERROR] "+e.message));
+setTimeout(()=>location.reload(), 240000);
+log("[*] start");
+
+const PATS=[
+"let a=new ArrayBuffer(16,{maxByteLength:64});let v=new Uint8Array(a,0,32);a.resize(8);structuredClone(v)",
+"let Ta=Uint8Array;Ta[Symbol.species]=function(len){return new Uint8Array(0x10000)};let a=new Ta(4);structuredClone(a)",
+"let a=new Uint8Array(8);let p=new Proxy(a,{get:function(t,prop){if(prop==='length')return 0x7fffffff;return Reflect.get(t,prop)}});structuredClone(p)",
+"let a=new ArrayBuffer(32,{maxByteLength:128});let v=new Uint8Array(a,{valueOf(){a.resize(4);return 0}},64);structuredClone(v)",
+"let a=new ArrayBuffer(64);a.constructor={[Symbol.species]:function(n){return new Uint8Array(1)}};let v=new Uint8Array(a,0,32);structuredClone(v)",
+"let a=new ArrayBuffer(32,{maxByteLength:256});let v=new Uint8Array(a);let s=v.slice(0,{valueOf(){a.resize(2);return 32}});structuredClone(s)",
+"let a=new ArrayBuffer(32,{maxByteLength:64});let v=new Uint8Array(a);let b=a.transfer();structuredClone(v)",
+"let a=new ArrayBuffer(64,{maxByteLength:128});let v=new Uint8Array(a);a.resize(8);let s=v.subarray(0,32);structuredClone(s)",
+"let a=new ArrayBuffer(32,{maxByteLength:64});let v=new Uint8Array(a);v.set({length:8,get 0(){a.resize(2);return 1}});structuredClone(v)",
+"let a=new Uint8Array(8);Object.defineProperty(a,'length',{value:0x7fffffff});structuredClone(a)",
+"let a=new ArrayBuffer(16,{maxByteLength:64});Object.defineProperty(a,'byteLength',{value:0x7fffffff});let v=new Uint8Array(a);structuredClone(v)",
+"let a=new ArrayBuffer(16,{maxByteLength:0x1000});a.resize(0x800);let v=new Uint8Array(a,0,0x400);a.resize(0x10);structuredClone(v)",
+"let a=new ArrayBuffer(32,{maxByteLength:128});let v2=new Uint16Array(a,0,16);a.resize(4);structuredClone(v2)",
+"let a=new ArrayBuffer(32,{maxByteLength:64});let v=new Uint8Array(a);structuredClone(v,{transfer:{length:1,0:a,[Symbol.iterator]:function*(){yield a}}})",
+"let a=new ArrayBuffer(32,{maxByteLength:64});let v=new Uint8Array(a);structuredClone(v,{transfer:[v.buffer]})",
+];
+const MODE1="function f(a,b){if(typeof a==='number'){var x=a|0;var y=b>>>0;return(x*y)>>0;}if(a instanceof Uint8Array){a[0]=b;return a.length;}if(a instanceof Array){a.push(b);return a.length;}return String(a)+String(b);}for(var i=0;i<500;i++){f(i,i);f(new Uint8Array(4),i);f([1],i);f('s',i);}var r1=f(new Uint8Array(0x10000000),1);var r2=f({length:0x100000000},2);r1+','+r2;";
+
+(async()=>{
+  let pass=0;
+  while(true){
+    pass++;
+    for(let i=0;i<PATS.length;i++){
+      log("P"+i+" pass="+pass);
+      try{ eval(PATS[i]); log("P"+i+" ok"); }
+      catch(e){ log("P"+i+" "+e.name); }
+      await new Promise(r=>setTimeout(r,30));
+    }
+    log("M1 pass="+pass);
+    try{ const r=eval(MODE1); log("M1 result="+r); }
+    catch(e){ log("M1 "+e.name); }
+    await new Promise(r=>setTimeout(r,100));
+  }
+})();
+</script>
