@@ -1,3 +1,6 @@
+import sys
+sys.stdout = open("log.txt","w")
+sys.stderr = sys.stdout
 import struct, ctypes, ctypes.util
 
 cf = ctypes.CDLL(ctypes.util.find_library('CoreFoundation'))
@@ -12,6 +15,8 @@ cf.CFDictionaryGetCount.restype = ctypes.c_long
 cf.CFDictionaryGetCount.argtypes = [ctypes.c_void_p]
 cf.CFRelease.restype = None
 cf.CFRelease.argtypes = [ctypes.c_void_p]
+
+print("START", flush=True)
 
 base = bytearray([
     0xFF,0xD8,0xFF,0xE1,0x00,0x00,0x45,0x78,0x69,0x66,0x00,0x00,
