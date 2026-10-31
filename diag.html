@@ -1,0 +1,16 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>diag</title>
+<body style="background:#000;color:#0f0;font:16px monospace;white-space:pre-wrap;margin:10px">
+<div id="o">[diag] v1</div>
+<script>
+var o = document.getElementById("o");
+function log(m){ o.textContent = o.textContent + "\n" + m; }
+log("L1 script alive");
+log("L2 SAB type: " + typeof SharedArrayBuffer);
+try { var s = new SharedArrayBuffer(16); log("L3 SAB created OK len=" + s.byteLength); }
+catch(e){ log("L3 SAB blocked: " + e.name); }
+try { var w = new Worker(URL.createObjectURL(new Blob(["var x=1;"]))); log("L5 worker OK"); }
+catch(e){ log("L5 worker fail: " + e.name); }
+log("L6 done");
+</script>
