@@ -1,75 +1,33 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ALIAS-PROBE</title>
+<title>OOM-PROBE</title>
 <body style="background:#000;color:#0f0;font:14px monospace;white-space:pre-wrap;margin:10px">
-<div id=o>[ALIAS-PROBE] realloc-vs-confusion decisive test</div>
+<div id=o>[OOM-PROBE] allocation-failure window</div>
 <script>
 const o=document.getElementById('o');
 const log=m=>o.textContent+="\n"+m;
 window.addEventListener('error',e=>log("[ERROR] "+e.message));
 log("[*] start");
-
 (async()=>{
-// T1: write pattern into huge buffer at a HIGH offset, then scan fresh small allocations for it
-try{
-  const ab=new ArrayBuffer(64,{maxByteLength:0x100000});
-  const huge=ab.transferToFixedLength(0x7FFFFFF0);
-  log("T1: huge.bl="+huge.byteLength);
-  const v=new Uint8Array(huge);
-  const MARK=0xC7;
-  // write marker at several high offsets (stay under 2GB to avoid wild pointer deref if confused... 
-  // 0x7FFFFFF0 is within signed positive; offsets in-bounds of the claim)
-  for(const off of [0x100000, 0x4000000, 0x20000000, 0x7FFFF000]){
-    v[off]=MARK;
-  }
-  log("T1: markers written");
-  // now allocate small buffers and scan for MARK
-  let alias=0;
-  for(let i=0;i<2000;i++){
-    const s=new ArrayBuffer(0x1000);
-    const u=new Uint8Array(s);
-    u.fill(0xAA);
-    for(let j=0;j<0x1000;j++){
-      if(u[j]===MARK && (j===0||u[j-1]!==MARK)){ alias++; if(alias<5) log("T1 ALIAS i="+i+" off=0x"+j.toString(16)); }
-    }
-    if((i%500)===0){log("T1 i="+i+" alias="+alias);await new Promise(r=>setTimeout(r,0));}
-  }
-  log("T1 done alias="+alias+(alias>0?" *** MEMORY CONFUSION ***":" (clean realloc — spec bug only)"));
-}catch(e){log("T1: "+e.name);}
-
-// T2: overlap two huge buffers, write via one, read via other
-try{
-  const a1=new ArrayBuffer(64,{maxByteLength:0x100000}).transferToFixedLength(0x7FF00000);
-  const a2=new ArrayBuffer(64,{maxByteLength:0x100000}).transferToFixedLength(0x7FF00000);
-  const v1=new Uint8Array(a1), v2=new Uint8Array(a2);
-  v1[0x10000]=0xD1;
-  log("T2: v2[0x10000]=0x"+v2[0x10000].toString(16)+(v2[0x10000]===0xD1?" *** OVERLAP ***":" (disjoint)"));
-  v1[0x3FFF0000]=0xD2;
-  log("T2: v2[0x3FFF0000]=0x"+v2[0x3FFF0000].toString(16)+(v2[0x3FFF0000]===0xD2?" *** OVERLAP-HIGH ***":" (disjoint-high)"));
-}catch(e){log("T2: "+e.name);}
-
-// T3: does resize() still enforce maxByteLength on the result?
-try{
-  const ab=new ArrayBuffer(64,{maxByteLength:0x100000});
-  const h=ab.transferToFixedLength(0x7FFFFFF0);
-  h.resize(0x200000);
-  log("T3: resize smaller ok, bl="+h.byteLength);
-  h.resize(0x8000000);
-  log("T3: resize to 128MB (over old 1MB max): bl="+h.byteLength+(h.byteLength===0x8000000?" *** MAX NOT ENFORCED ***":" (enforced)"));
-}catch(e){log("T3: "+e.name);}
-
-// T4: many huge buffers — memory pressure behavior
-try{
-  const arr=[];
-  for(let i=0;i<50;i++){
-    const h=new ArrayBuffer(64,{maxByteLength:0x100000}).transferToFixedLength(0x7FFFFFF0);
-    arr.push(h);
-  }
-  log("T4: 50 x 2GB-claim buffers created OK (spec says impossible)");
-  const v=new Uint8Array(arr[49]);
-  v[0x7FFFF000]=1;
-  log("T4: write to last buffer's far end OK");
-}catch(e){log("T4: "+e.name);}
+// sizes where allocation CANNOT succeed (> device RAM)
+const TESTS=[
+  ["f64-8G-elems",Float64Array,0x100000000/8],   // 8GB request
+  ["u8-8G",Uint8Array,0x200000000],                 // 8GB
+  ["f64-34G",Float64Array,0xFFFFFFFF],              // 34GB in elements
+  ["u8-max64",Uint8Array,0xFFFFFFFFFFFFFFFF]        // insane
+];
+for(const [tag,C,n] of TESTS){
+  try{
+    const ab=new ArrayBuffer(64,{maxByteLength:0x100000});
+    const out=ab.transferToFixedLength(n);
+    log(tag+": RETURNED bl="+out.byteLength+" (should have thrown)");
+    const v=new Uint8Array(out);
+    v[0]=0x41;
+    const tail=v[out.byteLength-1];
+    log(tag+": tail read=0x"+(tail!==undefined?tail.toString(16):"undef")+" *** ALIVE = POSSIBLE CONFUSION ***");
+  }catch(e){ log(tag+": "+e.name+" (correct-ish)"); }
+  await new Promise(r=>setTimeout(r,100));
+}
 log("DONE");
 })();
 </script>
