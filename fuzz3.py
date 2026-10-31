@@ -1,7 +1,7 @@
 import sys
 sys.stdout = open("log.txt","w")
 sys.stderr = sys.stdout
-import struct, ctypes, ctypes.util
+import struct, ctypes, ctypes.util, base64
 
 cf = ctypes.CDLL(ctypes.util.find_library('CoreFoundation'))
 imgio = ctypes.CDLL(ctypes.util.find_library('ImageIO'))
@@ -18,7 +18,9 @@ cf.CFRelease.argtypes = [ctypes.c_void_p]
 
 print("START", flush=True)
 
-def jpeg_with_exif(nextIFD, gpsCount, ifd0count):
+REAL = base64.b64decode("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAAQABADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDwKiiivzI/uM//2Q==")
+
+def with_exif(nextIFD, gpsCount, ifd0count):
     t = bytearray([0x49,0x49,0x2A,0x00,0x08,0x00,0x00,0x00])
     t += struct.pack("<H", ifd0count)
     t += struct.pack("<HHII", 0x8825, 4, 1, 0x1A)
@@ -28,14 +30,8 @@ def jpeg_with_exif(nextIFD, gpsCount, ifd0count):
     t += struct.pack("<HHI", 0x0002, 2, gpsCount)
     t += struct.pack("<I", 0x41)
     app1 = bytes([0x45,0x78,0x69,0x66,0x00,0x00]) + bytes(t)
-    exifseg = bytearray([0xFF,0xE1]) + struct.pack(">H", len(app1)+2) + app1
-    rest = bytearray()
-    rest += bytes([0xFF,0xDB,0x00,0x43,0x00]) + bytes([0x10]*64)
-    rest += bytes([0xFF,0xC0,0x00,0x11,0x08,0x00,0x10,0x00,0x10,0x03,0x01,0x11,0x00,0x02,0x11,0x00,0x03,0x11,0x00])
-    rest += bytes([0xFF,0xC4,0x00,0x14,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00])
-    rest += bytes([0xFF,0xDA,0x00,0x0C,0x03,0x01,0x00,0x02,0x11,0x03,0x11,0x00,0x3F,0x00])
-    rest += bytes([0x00,0x3F,0xFF,0xD9])
-    return bytes([0xFF,0xD8]) + bytes(exifseg) + bytes(rest)
+    seg = bytearray([0xFF,0xE1]) + struct.pack(">H", len(app1)+2) + app1
+    return REAL[:2] + bytes(seg) + REAL[2:]
 
 def test(tag, data):
     open("t.jpg","wb").write(data)
@@ -52,11 +48,12 @@ def test(tag, data):
     print("  DICT COUNT = "+str(n), flush=True)
     cf.CFRelease(props)
 
-test("baseline-valid", jpeg_with_exif(0, 2, 1))
+test("baseline-plain", REAL)
+test("baseline-exif", with_exif(0, 2, 1))
 for off in [0x10,0x100,0x1000,0x10000,0x100000,0x7FFFFFF0,0xFFFFFFFF]:
-    test("nextIFD=0x%x"%off, jpeg_with_exif(off, 2, 1))
+    test("nextIFD=0x%x"%off, with_exif(off, 2, 1))
 for cnt in [0x0100,0x1000,0x8000,0xFFFF]:
-    test("ifd0count=0x%x"%cnt, jpeg_with_exif(0, 2, cnt))
+    test("ifd0count=0x%x"%cnt, with_exif(0, 2, cnt))
 for cnt in [0x10000,0x40000000,0xFFFFFFFF]:
-    test("gpscount=0x%x"%cnt, jpeg_with_exif(0, cnt, 1))
+    test("gpscount=0x%x"%cnt, with_exif(0, cnt, 1))
 print("DONE", flush=True)
