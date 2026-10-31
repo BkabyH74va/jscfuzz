@@ -1,0 +1,53 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PSD-FUZZ</title>
+<body style="background:#000;color:#0f0;font:12px monospace;white-space:pre-wrap;margin:6px">
+<div id=o>[PSD-FUZZ] mergeLayers dimension probe</div>
+<script>
+const o=document.getElementById('o');const log=m=>{o.textContent+="\n"+m;};
+window.addEventListener('error',e=>log("[ERR] "+e.message));
+log("[*] start");
+function u16(n){n&=0xffff;return[n>>8&255,n&255];}
+function u32(n){n>>>=0;return[n>>>24&255,n>>>16&255,n>>>8&255,n&255];}
+function s4(s){return[s.charCodeAt(0),s.charCodeAt(1),s.charCodeAt(2),s.charCodeAt(3)];}
+function ps(s){const b=[s.length&255];for(let i=0;i<s.length;i++)b.push(s.charCodeAt(i));while(b.length%4)b.push(0);return b;}
+
+function buildPSD(cw,ch,layers){
+  let h=[...s4("8BPS"),...u16(1),0,0,0,0,0,0,...u16(3),...u32(ch),...u32(cw),...u16(8),...u16(3)];
+  h=h.concat(u32(0),u32(0));
+  let recs=[],chdata=[];
+  for(const L of layers){
+    const nch=L.nch||3;
+    let rec=[...u32(L.t),...u32(L.l),...u32(L.b),...u32(L.r),...u16(nch)];
+    for(let c=0;c<nch;c++)rec=rec.concat(u16(c),u32(L.chLen));
+    rec=rec.concat(s4("8BIM"),s4("norm"),255,0,L.flags&255,0);
+    const ex=[...u32(0),...u32(0),...ps("L")];
+    rec=rec.concat(u32(ex.length),ex);
+    recs=recs.concat(rec);
+    for(let c=0;c<nch;c++){ chdata.push(0,0); for(let i=0;i<L.chLen;i++)chdata.push(L.fill||0x41); }
+  }
+  const lic=[...u16(layers.length&0xffff),...recs,...chdata];
+  const li=[...u32(lic.length),...lic];
+  const lamc=[...li,...u32(0)];
+  const lam=[...u32(lamc.length),...lamc];
+  const imgd=[0,0]; for(let i=0;i<cw*ch*3&&i<4096;i++)imgd.push(0x55);
+  return new Uint8Array([...h,...lam,...imgd]);
+}
+
+const R=[ [0,0,16,16],[0,0,65535,65535],[0,0,0x40000000,16],[0,0,17,17],[65530,65530,4,4],[0,0,256,65535],[0,0,65535,256] ];
+const F=[0,1,8,9,255];
+const CL=[0,2,32,768];
+(async()=>{
+  let pass=0;
+  for(const rect of R)for(const fl of F)for(const cl of CL){
+    pass++;
+    const L={t:rect[0],l:rect[1],b:rect[2],r:rect[3],flags:fl,chLen:cl,nch:3};
+    const blob=new Blob([buildPSD(16,16,[L,L])],{type:"image/vnd.adobe.photoshop"});
+    log("p"+pass+" rect="+rect.join(",")+" flags="+fl+" chLen="+cl);
+    try{ const b=await createImageBitmap(blob); log("  OK "+b.width+"x"+b.height); b.close&&b.close(); }
+    catch(e){ log("  "+e.name); }
+    await new Promise(r=>setTimeout(r,150));
+  }
+  log("DONE all passes");
+})();
+</script>
