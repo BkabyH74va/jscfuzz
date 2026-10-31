@@ -1,13 +1,14 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TA-RACE v9</title>
+<title>TA-RACE v11</title>
 <body style="background:#000;color:#0f0;font:13px monospace;white-space:pre-wrap;margin:8px">
-<div id=o>[TA-RACE v9] recycled WASM mem - race runs forever</div>
+<div id=o>[TA-RACE v11] auto-reload 3min - survives overnight</div>
 <script>
 const o=document.getElementById('o');
 const log=m=>{o.textContent+="\n"+m;};
 window.addEventListener('error',e=>log("[ERROR] "+e.message));
 log("[*] UA: "+navigator.userAgent);
+setTimeout(()=>location.reload(), 180000);
 
 const WK=`let u8=null, mem=null, who="";
 function lg(m){postMessage({log:who+" "+m});}
