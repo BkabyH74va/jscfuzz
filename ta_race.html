@@ -17,7 +17,7 @@ body { background:#000; color:#0f0; font-family:monospace; font-size:12px; margi
 
 var LOG = document.getElementById('log');
 var t0 = Date.now();
-var it = 0, gens = 0, clones = 0, lastLog = 0, heapMB = '?';
+var it = 0, gens = 0, clones = 0, heapMB = '?';
 
 function log(msg) {
   var line = '[' + ((Date.now()-t0)/1000).toFixed(0) + 's it=' + it + ' gens=' + gens + ' clones=' + clones + ' heap=' + heapMB + 'MB] ' + msg;
@@ -31,27 +31,29 @@ document.addEventListener('visibilitychange', function() {
 // shared WASM memory — the battleground
 var SHARED_MEM = new WebAssembly.Memory({initial:1, maximum:128, shared:true});
 
-// grow worker source
+// grow worker
 var growSrc = [
   'onmessage = function(e) {',
   '  var mem = e.data;',
   '  var n = 0;',
-  '  while(true) {',
+  '  function grow() {',
   '    try { mem.grow(1); } catch(err) {}',
   '    n++;',
-  '    if(n % 100000 === 0) postMessage({type:"grow", n:n});',
+  '    if(n % 10000 === 0) postMessage({type:"grow", n:n});',
+  '    setTimeout(grow, 0);',
   '  }',
+  '  grow();',
   '};'
 ].join('\n');
 
-// transfer worker source
+// transfer worker
 var transferSrc = [
   'onmessage = function(e) {',
   '  var mem = e.data;',
   '  var views = [];',
   '  for(var i=0; i<96; i++) views.push(new Uint8Array(mem.buffer, 0, 65536));',
   '  var n = 0;',
-  '  while(true) {',
+  '  function transfer() {',
   '    for(var i=0; i<96; i++) {',
   '      try {',
   '        var ab = views[i].buffer;',
@@ -60,8 +62,10 @@ var transferSrc = [
   '      } catch(err) {}',
   '    }',
   '    n++;',
-  '    if(n % 10000 === 0) postMessage({type:"transfer", n:n});',
+  '    if(n % 1000 === 0) postMessage({type:"transfer", n:n});',
+  '    setTimeout(transfer, 0);',
   '  }',
+  '  transfer();',
   '};'
 ].join('\n');
 
@@ -73,10 +77,12 @@ var transferURL = URL.createObjectURL(transferBlob);
 var growWorker = new Worker(growURL);
 var transferWorker = new Worker(transferURL);
 
+var lastLog = 0;
+
 growWorker.onmessage = function(e) {
   if(e.data.type === 'grow') {
     gens = e.data.n;
-    if(Date.now() - lastLog > 5000) {
+    if(Date.now() - lastLog > 3000) {
       lastLog = Date.now();
       if(performance.memory) heapMB = (performance.memory.usedJSHeapSize/1048576).toFixed(1);
       log('grow alive');
@@ -87,7 +93,7 @@ growWorker.onmessage = function(e) {
 transferWorker.onmessage = function(e) {
   if(e.data.type === 'transfer') {
     it = e.data.n;
-    if(Date.now() - lastLog > 5000) {
+    if(Date.now() - lastLog > 3000) {
       lastLog = Date.now();
       if(performance.memory) heapMB = (performance.memory.usedJSHeapSize/1048576).toFixed(1);
       log('transfer alive');
@@ -100,18 +106,17 @@ var mainViews = [];
 for(var i=0; i<16; i++) mainViews.push(new Uint8Array(SHARED_MEM.buffer, 0, 65536));
 
 function mainLoop() {
-  while(true) {
-    for(var i=0; i<16; i++) {
-      try { mainViews[i][0] ^= 0x41; } catch(err) {}
-    }
-    if(Math.random() < 1/4096) {
-      try {
-        var slice = new Uint8Array(SHARED_MEM.buffer, 0, 65536);
-        structuredClone(slice, {transfer:[slice.buffer]});
-        clones++;
-      } catch(err) {}
-    }
+  for(var i=0; i<16; i++) {
+    try { mainViews[i][0] ^= 0x41; } catch(err) {}
   }
+  if(Math.random() < 1/4096) {
+    try {
+      var slice = new Uint8Array(SHARED_MEM.buffer, 0, 65536);
+      structuredClone(slice, {transfer:[slice.buffer]});
+      clones++;
+    } catch(err) {}
+  }
+  setTimeout(mainLoop, 0);
 }
 
 growWorker.postMessage(SHARED_MEM);
