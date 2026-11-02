@@ -31,28 +31,30 @@ document.addEventListener('visibilitychange', function() {
 // shared WASM memory — the battleground
 var SHARED_MEM = new WebAssembly.Memory({initial:1, maximum:128, shared:true});
 
-// grow worker
+// grow worker — with spawn confirm + error reporting
 var growSrc = [
   'onmessage = function(e) {',
   '  var mem = e.data;',
   '  var n = 0;',
+  '  postMessage({type:"spawn", msg:"grow worker alive"});',
   '  function grow() {',
-  '    try { mem.grow(1); } catch(err) {}',
+  '    try { mem.grow(1); } catch(err) { postMessage({type:"growerr", msg:err.message}); return; }',
   '    n++;',
-  '    if(n % 10000 === 0) postMessage({type:"grow", n:n});',
+  '    if(n % 1000 === 0) postMessage({type:"grow", n:n});',
   '    setTimeout(grow, 0);',
   '  }',
   '  grow();',
   '};'
 ].join('\n');
 
-// transfer worker
+// transfer worker — with spawn confirm
 var transferSrc = [
   'onmessage = function(e) {',
   '  var mem = e.data;',
   '  var views = [];',
   '  for(var i=0; i<96; i++) views.push(new Uint8Array(mem.buffer, 0, 65536));',
   '  var n = 0;',
+  '  postMessage({type:"spawn", msg:"transfer worker alive"});',
   '  function transfer() {',
   '    for(var i=0; i<96; i++) {',
   '      try {',
@@ -80,23 +82,32 @@ var transferWorker = new Worker(transferURL);
 var lastLog = 0;
 
 growWorker.onmessage = function(e) {
+  if(e.data.type === 'spawn') {
+    log('SPAWN: ' + e.data.msg);
+  }
   if(e.data.type === 'grow') {
     gens = e.data.n;
     if(Date.now() - lastLog > 3000) {
       lastLog = Date.now();
       if(performance.memory) heapMB = (performance.memory.usedJSHeapSize/1048576).toFixed(1);
-      log('grow alive');
+      log('grow alive n=' + e.data.n);
     }
+  }
+  if(e.data.type === 'growerr') {
+    log('GROW ERROR: ' + e.data.msg);
   }
 };
 
 transferWorker.onmessage = function(e) {
+  if(e.data.type === 'spawn') {
+    log('SPAWN: ' + e.data.msg);
+  }
   if(e.data.type === 'transfer') {
     it = e.data.n;
     if(Date.now() - lastLog > 3000) {
       lastLog = Date.now();
       if(performance.memory) heapMB = (performance.memory.usedJSHeapSize/1048576).toFixed(1);
-      log('transfer alive');
+      log('transfer alive n=' + e.data.n);
     }
   }
 };
